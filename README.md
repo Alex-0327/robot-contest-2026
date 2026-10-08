@@ -67,3 +67,13 @@ python src/demo_hand_real.py   # 比赛笔记本上跑：真机手部张合
 - [ ] 比赛笔记本到位后，按本 README 在其上重装一遍环境（Windows 需改用官方 C++ SDK 编译 dexhand）
 - [ ] 灵巧手 C++ SDK（github.com/DexRobot/dexhand_sdk_cpp，GitHub 直连不稳时从官网
       dex-robot.com 下载中心获取）；Python 路线优先用 pyzlg_dexhand
+- [ ] 写 `src/grasp_api.py`：pick_pen（预成形→下降→低力闭合三指捏）+
+      calibrate_pen（抓后相机测量笔杆方向与笔尖位置 → 腕部修正 → 记录笔尖偏置）
+
+## 已确认的现场信息（2026-10-09 向组委会核实）
+
+- 自带笔架/V 型槽：**不允许**
+- 毛笔固定在**加粗把手**上（方便抓握），**初始位置由组委会给定**
+- 取笔路线已定：**抓后视觉自校正**（抓握不求完美，抓完用头顶相机测量笔姿 →
+  腕部补偿立正 → 记录笔尖偏置供后续打点修正），详见
+  ~/Documents/RoboCup/01-随笔/技术决策记录.md
