@@ -1,0 +1,4 @@
+.venv/
+sdk/
+__pycache__/
+*.log
