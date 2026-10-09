@@ -11,12 +11,31 @@ sdk/
   fairino-python-sdk/   # 法奥机械臂 SDK（官方开源纯 Python 版，XMLRPC 协议，跨平台）
   pyzlg_dexhand/        # 灵巧智能五指手 Python SDK（ZLG USBCANFD 通信，主用）
   dexhand_sdk_python/   # 灵巧官方 Python SDK（目前只支持三指 021S，五指请用 pyzlg_dexhand）
+  dexrobot_urdf/        # DexHand021 五指手 URDF（左右手，详细+简化）+ STL 网格 + SolidWorks 模型
+  frcobot_ros2/         # 法奥官方 ROS2 包：fairino_description/ 含 FR3 等全型号 URDF+STL
 src/
   demo_arm.py           # 机械臂最小连接测试
   demo_hand_mock.py     # 灵巧手 Mock 测试（无硬件，Mac 上可直接跑）
   demo_hand_real.py     # 灵巧手真机控制（仅比赛笔记本 Linux + USBCANFD-200U）
+  arm_api.py            # 机械臂运动原语库（move_rel/move_to/航点示教）
 五指规则-更新2026(1).pdf  # 赛项规则
 ```
+
+## 硬件型号与关键参数（2026-10-09 照片确认 + 官方资料）
+
+机械臂：**法奥 FR3**（白色机身+橙色关节环；负载 3kg / 臂展 622mm / 重复定位 ±0.02mm /
+自重约 15kg；绝对定位精度约 1mm，开环打点必须配视觉闭环）
+- URDF：`sdk/frcobot_ros2/fairino_description/urdf/fairino3_v6.urdf`（配 meshes/fairino3_v6/）
+- 尺寸图纸/3D 模型：https://fairino-doc-zhs.readthedocs.io/3.9.5/download.html
+- SDK API 手册：https://fr-documentation.readthedocs.io/zh_CN/latest/SDKManual/python_intro.html
+
+灵巧手：**DexRobot DexHand021 黑色版**（19 自由度=12 主动+7 被动 / 约 1.0kg / CANFD /
+集成触觉+位置+力矩传感器）
+- URDF：`sdk/dexrobot_urdf/urdf/dexhand021_{left,right}[_simplified].urdf`（配 meshes/dexhand021/）
+- SolidWorks 模型：`sdk/dexrobot_urdf/SW_models/`
+- CANFD 协议实现：`sdk/pyzlg_dexhand/pyzlg_dexhand/dexhand_protocol/`
+- SDK 用户手册 V1.2 PDF：在 Linux 机器 `~/DexCap_glove_teleop/teleop/` 下，建议拷入本项目
+- 手部运动学库（如需 FK/IK）：github/gitee DexRobot/dexrobot_kinematics
 
 ## 环境激活
 
