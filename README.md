@@ -35,7 +35,7 @@ src/
 - SolidWorks 模型：`sdk/dexrobot_urdf/SW_models/`
 - CANFD 协议实现：`sdk/pyzlg_dexhand/pyzlg_dexhand/dexhand_protocol/`
 - SDK 用户手册 V1.2 PDF：在 Linux 机器 `~/DexCap_glove_teleop/teleop/` 下，建议拷入本项目
-- 手部运动学库（如需 FK/IK）：github/gitee DexRobot/dexrobot_kinematics
+- 手部运动学库（FK/IK）：`sdk/dexrobot_kinematics/`（依赖 pinocchio，用到时再 `pip install pin`）
 
 ## 环境激活
 
