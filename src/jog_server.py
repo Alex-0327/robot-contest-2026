@@ -9,6 +9,10 @@ Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域�
 
 然后浏览器打开 http://localhost:8080
 
+比赛当天快速标定流程：页面顶部选已有航点 →「去该航点」（原地抬高→平移→降下，
+全程 move_ik 肘朝下构型全局劣后）→ 点动微调 →「覆盖保存到该航点」（新格式，
+pose+joints 同时落盘）。
+
 注意：控制器同时只应由一个程序下发运动指令，且 CNDE 状态流只支持单连接。
 运行本面板前必须退出 teach_daemon（echo quit > /tmp/teach_cmd），反之亦然。
 急停后必须点「复位+自动模式」才能继续运动（StopMotion 会锁存停止态）。
@@ -47,6 +51,14 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
 <h1>机械臂点动面板</h1>
 <div id="pose">位姿加载中…</div>
+<div class="row">
+  <label>航点
+    <select id="wpsel" style="font-size:16px;padding:6px;max-width:240px"></select>
+  </label>
+  <button onclick="loadWps()">刷新航点列表</button>
+  <button onclick="gotoWp()">去该航点</button>
+  <button onclick="saveOver()">覆盖保存到该航点</button>
+</div>
 <div class="row">
   <label>步长
     <select id="step">
@@ -153,7 +165,59 @@ async function savewp() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setMsg('已存航点 [' + name + ']');
+    loadWps();
   } catch (e) { setMsg('保存失败：' + e.message, true); }
+}
+
+async function loadWps() {
+  try {
+    const r = await fetch('/api/waypoints');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    const sel = document.getElementById('wpsel');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    j.waypoints.forEach(w => {
+      const o = document.createElement('option');
+      o.value = w.name;
+      o.textContent = w.name + (w.has_joints ? '' : '（旧格式）');
+      sel.appendChild(o);
+    });
+    if (prev) sel.value = prev;
+  } catch (e) { setMsg('航点列表加载失败：' + e.message, true); }
+}
+
+async function gotoWp() {
+  const name = document.getElementById('wpsel').value;
+  if (!name) { setMsg('先选一个航点', true); return; }
+  if (busy) return;
+  busy = true; setButtons(true); setMsg('正在去航点 [' + name + ']（抬高→平移→降下）…');
+  try {
+    const r = await fetch('/api/goto_waypoint', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('已到航点 [' + name + ']，可以开始微调');
+  } catch (e) { setMsg('去航点失败：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
+}
+
+async function saveOver() {
+  const name = document.getElementById('wpsel').value;
+  if (!name) { setMsg('先选一个航点', true); return; }
+  if (!confirm('确认用当前位姿覆盖航点 [' + name + ']？旧值将被替换（含关节角）')) return;
+  try {
+    const r = await fetch('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setMsg('已覆盖保存航点 [' + name + ']');
+    loadWps();
+  } catch (e) { setMsg('覆盖保存失败：' + e.message, true); }
 }
 
 async function resetCtl() {
@@ -189,6 +253,7 @@ document.addEventListener('keydown', e => {
 
 refreshPose();
 setInterval(refreshPose, 2000);
+loadWps();
 </script>
 </body>
 </html>
@@ -231,6 +296,19 @@ class MockArm:
 
     def save_waypoint(self, name):
         print(f"[mock] 存航点 {name} = {self.pose}")
+
+    def list_waypoints(self):
+        return {
+            "home": {"pose": [400.0, 0.0, 300.0, 180.0, 0.0, 0.0], "joints": None},
+            "eye_dot": {"pose": [300.0, -100.0, 200.0, 180.0, 0.0, 0.0],
+                        "joints": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+        }
+
+    def get_waypoint(self, name):
+        wps = self.list_waypoints()
+        if name not in wps:
+            raise KeyError(f"航点 [{name}] 不存在，已有: {list(wps)}")
+        return list(wps[name]["pose"])
 
     def move_ik(self, pose, vel=10.0, blocking=True):
         time.sleep(0.3)
@@ -291,6 +369,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"pose": get_arm().get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/waypoints":
+            try:
+                wps = get_arm().list_waypoints()
+                self._send_json({"waypoints": [
+                    {"name": n, "pose": w["pose"], "has_joints": w["joints"] is not None}
+                    for n, w in wps.items()]})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -338,6 +424,36 @@ class Handler(BaseHTTPRequestHandler):
                 over = [gx, gy, travel] + rpy
                 arm.move_ik(over, vel=10)
                 arm.move_ik([gx, gy, hover] + rpy, vel=5)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
+        elif self.path == "/api/goto_waypoint":
+            # 现场标定主流程第一步：去已保存航点。
+            # 三段式：原地抬高 → 平移 → 降下；全程 move_ik（肘朝下构型全局劣后，防翻肘）。
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                name = str(req["name"]).strip()
+                if not name:
+                    raise ValueError("航点名不能为空")
+                travel = float(req.get("travel_z", 300.0))
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                wp = arm.get_waypoint(name)
+                cur = arm.get_pose()
+                safe_z = max(travel, cur[2], wp[2] + 50.0)  # 转场高度不低于目标上方 50mm
+                high = cur[:]; high[2] = safe_z
+                arm.move_ik(high, vel=10)
+                arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
+                arm.move_ik(wp, vel=5)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)

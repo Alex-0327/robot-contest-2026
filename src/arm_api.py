@@ -208,6 +208,17 @@ class Arm:
         """兼容旧格式（纯位姿列表）与新格式（{pose, joints}）。"""
         return entry["pose"] if isinstance(entry, dict) else entry
 
+    def list_waypoints(self):
+        """列出全部航点：{name: {"pose": [...], "joints": [...] | None}}（只读取，不运动）。
+        旧格式航点 joints 为 None。"""
+        if not os.path.exists(self.waypoint_file):
+            return {}
+        with open(self.waypoint_file) as f:
+            raw = json.load(f)
+        return {name: {"pose": self._entry_pose(entry),
+                       "joints": entry.get("joints") if isinstance(entry, dict) else None}
+                for name, entry in raw.items()}
+
     def get_waypoint(self, name):
         """读取已保存航点的位姿 [x,y,z,rx,ry,rz]（只读取，不运动）。"""
         with open(self.waypoint_file) as f:
