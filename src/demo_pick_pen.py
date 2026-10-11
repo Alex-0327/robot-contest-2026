@@ -8,15 +8,25 @@
 每次只改一个量，记下改了什么。
 
 用法：
-    PYTHONPATH=~/fairino-python-sdk/linux/fairino python src/demo_pick_pen.py
+    PYTHONPATH=~/fairino-python-sdk/linux/fairino python src/demo_pick_pen.py [后缀]
+
+带后缀（如 test）时从 waypoints_test.json 草稿文件读航点，配合
+teach_waypoints.py 的后缀使用。
 """
+import os
+import sys
+
 from arm_api import Arm
 from hand_api import Hand
 
 ABOVE_MM = 60       # 悬停点在夹取位上方的高度
 GRASP_PRESSURE = 5  # 握力上限 N（0~20）
 
-arm = Arm()
+suffix = sys.argv[1] if len(sys.argv) > 1 else ""
+waypoint_file = (os.path.join(os.path.dirname(__file__), f"waypoints_{suffix}.json")
+                 if suffix else None)
+
+arm = Arm(waypoint_file=waypoint_file)
 hand = Hand()
 arm.enable(True)
 hand.open()

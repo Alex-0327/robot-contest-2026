@@ -28,12 +28,14 @@ WAYPOINT_FILE = os.path.join(os.path.dirname(__file__), "waypoints.json")
 
 
 class Arm:
-    def __init__(self, ip=DEFAULT_IP, tool=None, user=None):
+    def __init__(self, ip=DEFAULT_IP, tool=None, user=None, waypoint_file=None):
         """连接机械臂。tool/user 默认自动读取控制器当前激活的工具/工件坐标系
-        （10-11 教训：控制柜上激活的是 1 号工具，硬编码 0 会报 err=154 工具不符）。"""
+        （10-11 教训：控制柜上激活的是 1 号工具，硬编码 0 会报 err=154 工具不符）。
+        waypoint_file 默认 waypoints.json，练习时传别的路径避免污染正式航点。"""
         self.robot = Robot.RPC(ip)
         if self.robot is None:
             raise ConnectionError(f"无法连接机械臂 {ip}")
+        self.waypoint_file = waypoint_file or WAYPOINT_FILE
         if tool is None or user is None:
             time.sleep(0.5)  # 等 CNDE 状态流建立
             err, pkg = self.robot.GetRobotRealTimeState()
@@ -140,17 +142,17 @@ class Arm:
         """把当前位姿记为命名航点（配合拖动示教使用）。"""
         pose = self.get_pose()
         waypoints = {}
-        if os.path.exists(WAYPOINT_FILE):
-            with open(WAYPOINT_FILE) as f:
+        if os.path.exists(self.waypoint_file):
+            with open(self.waypoint_file) as f:
                 waypoints = json.load(f)
         waypoints[name] = pose
-        with open(WAYPOINT_FILE, "w") as f:
+        with open(self.waypoint_file, "w") as f:
             json.dump(waypoints, f, indent=2, ensure_ascii=False)
-        print(f"航点 [{name}] 已保存: {[round(p, 1) for p in pose]}")
+        print(f"航点 [{name}] 已保存到 {os.path.basename(self.waypoint_file)}: {[round(p, 1) for p in pose]}")
 
     def get_waypoint(self, name):
         """读取已保存航点的位姿 [x,y,z,rx,ry,rz]（只读取，不运动）。"""
-        with open(WAYPOINT_FILE) as f:
+        with open(self.waypoint_file) as f:
             waypoints = json.load(f)
         if name not in waypoints:
             raise KeyError(f"航点 [{name}] 不存在，已有: {list(waypoints)}")

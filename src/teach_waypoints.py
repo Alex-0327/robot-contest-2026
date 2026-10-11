@@ -1,7 +1,10 @@
 """拖动示教记录航点：把固定位置（笔、墨碟、纸面）存进 waypoints.json。
 
 用法：
-    PYTHONPATH=~/fairino-python-sdk/linux/fairino python src/teach_waypoints.py
+    PYTHONPATH=~/fairino-python-sdk/linux/fairino python src/teach_waypoints.py [后缀]
+
+带后缀（如 test）时航点存到 waypoints_test.json 草稿文件，不污染正式
+waypoints.json——机器没摆到比赛位时练习示教就用它。
 
 流程：
     1. 脚本先让手进入握笔预成形（先弯手指后转拇指）
@@ -14,10 +17,20 @@
 
 注意：拖动中臂处于无力随动状态，动作要慢，别让手碰桌面。
 """
+import os
+import sys
+
 from arm_api import Arm
 from hand_api import Hand
 
-arm = Arm()
+suffix = sys.argv[1] if len(sys.argv) > 1 else ""
+if suffix:
+    waypoint_file = os.path.join(os.path.dirname(__file__), f"waypoints_{suffix}.json")
+    print(f"草稿模式：航点保存到 waypoints_{suffix}.json")
+else:
+    waypoint_file = None
+
+arm = Arm(waypoint_file=waypoint_file)
 hand = Hand()
 arm.enable(True)
 
