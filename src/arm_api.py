@@ -73,16 +73,21 @@ class Arm:
         """经逆解走关节空间到目标位姿——大姿态变化（如翻转后升降）用这条，
         笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。
         config=-1（保持当前构型）在臂处于非常规姿态后会假报不可达（err=38），
-        因此依次尝试所有 8 种构型（10-11 晚教训：rz 换手位后 config=-1 全挂）。"""
-        joints = None
+        因此解出全部 8 种构型，选与当前关节角距离最小的解（10-11 晚教训：
+        取"第一个成功"的构型会翻肘，TCP 轨迹安全但大臂扫到桌面）。"""
+        err, cur = self.robot.GetActualJointPosDegree()
+        if err != 0:
+            raise RuntimeError(f"读取关节角失败 err={err}")
+        best = None
         for cfg in (-1, 0, 1, 2, 3, 4, 5, 6, 7):
             err, j = self.robot.GetInverseKin(0, list(pose), cfg)
             if err == 0 and j is not None:
-                joints = list(j)
-                break
-        if joints is None:
+                dist = sum((a - b) ** 2 for a, b in zip(cur, j))
+                if best is None or dist < best[0]:
+                    best = (dist, list(j))
+        if best is None:
             raise RuntimeError("逆解失败（8 种构型均不可达）")
-        self.move_joints(joints, vel=vel, blocking=blocking)
+        self.move_joints(best[1], vel=vel, blocking=blocking)
 
     def wait_done(self, timeout=30.0):
         """阻塞等待当前运动指令执行完成。"""
@@ -178,16 +183,26 @@ class Arm:
             raise RuntimeError(f"拖动示教切换失败 err={error}")
 
     def save_waypoint(self, name):
-        """把当前位姿记为命名航点（配合拖动示教使用）。"""
+        """把当前位姿记为命名航点（配合拖动示教使用）。
+        同时记录 TCP 位姿和 6 个关节角——关节角可用于走 MoveJ，
+        保证回到示教时的同一构型（不翻肘）。"""
         pose = self.get_pose()
+        err, joints = self.robot.GetActualJointPosDegree()
+        if err != 0:
+            raise RuntimeError(f"读取关节角失败 err={err}")
         waypoints = {}
         if os.path.exists(self.waypoint_file):
             with open(self.waypoint_file) as f:
                 waypoints = json.load(f)
-        waypoints[name] = pose
+        waypoints[name] = {"pose": pose, "joints": list(joints)}
         with open(self.waypoint_file, "w") as f:
             json.dump(waypoints, f, indent=2, ensure_ascii=False)
         print(f"航点 [{name}] 已保存到 {os.path.basename(self.waypoint_file)}: {[round(p, 1) for p in pose]}")
+
+    @staticmethod
+    def _entry_pose(entry):
+        """兼容旧格式（纯位姿列表）与新格式（{pose, joints}）。"""
+        return entry["pose"] if isinstance(entry, dict) else entry
 
     def get_waypoint(self, name):
         """读取已保存航点的位姿 [x,y,z,rx,ry,rz]（只读取，不运动）。"""
@@ -195,7 +210,16 @@ class Arm:
             waypoints = json.load(f)
         if name not in waypoints:
             raise KeyError(f"航点 [{name}] 不存在，已有: {list(waypoints)}")
-        return waypoints[name]
+        return self._entry_pose(waypoints[name])
+
+    def get_waypoint_joints(self, name):
+        """读取航点保存时的 6 关节角；旧格式航点没有关节角则返回 None。"""
+        with open(self.waypoint_file) as f:
+            waypoints = json.load(f)
+        if name not in waypoints:
+            raise KeyError(f"航点 [{name}] 不存在，已有: {list(waypoints)}")
+        entry = waypoints[name]
+        return entry.get("joints") if isinstance(entry, dict) else None
 
     def goto_waypoint(self, name, vel=20.0):
         """运动到已保存的命名航点。"""
