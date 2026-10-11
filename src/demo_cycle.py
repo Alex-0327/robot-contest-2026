@@ -47,6 +47,15 @@ def check(step):
         raise RuntimeError(f"控制器报警 main={pkg.main_code}，停止")
 
 
+def zmove(dz, vel=5):
+    """竖直移动。翻转后（ry≈±90 奇异区）笛卡尔 MoveL 会报 err=99/112，
+    所以一律走 IK+关节空间。"""
+    pose = arm.get_pose()
+    target = list(pose)
+    target[2] += dz
+    arm.move_ik(target, vel=vel)
+
+
 print("1. 手腕回旋180（笔尖朝上）")
 j6(-180)
 check(1)
@@ -80,12 +89,12 @@ check(10)
 
 print("11. 模拟落笔：3段下降共15cm，段间停顿")
 for i in range(3):
-    arm.move_rel(dz=-DIP_MM // 3, vel=5)
+    zmove(-DIP_MM // 3)
     check(f"11-{i+1}")
     time.sleep(1.5)
 print("12. 3段升回")
 for i in range(3):
-    arm.move_rel(dz=DIP_MM // 3, vel=5)
+    zmove(DIP_MM // 3)
     check(f"12-{i+1}")
 
 print("13. 回旋180")
