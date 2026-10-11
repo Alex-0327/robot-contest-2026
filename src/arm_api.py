@@ -71,11 +71,18 @@ class Arm:
 
     def move_ik(self, pose, vel=10.0, blocking=True):
         """经逆解走关节空间到目标位姿——大姿态变化（如翻转后升降）用这条，
-        笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。"""
-        err, joints = self.robot.GetInverseKin(0, list(pose))
-        if err != 0:
-            raise RuntimeError(f"逆解失败 err={err}（目标不可达）")
-        self.move_joints(list(joints), vel=vel, blocking=blocking)
+        笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。
+        config=-1（保持当前构型）在臂处于非常规姿态后会假报不可达（err=38），
+        因此依次尝试所有 8 种构型（10-11 晚教训：rz 换手位后 config=-1 全挂）。"""
+        joints = None
+        for cfg in (-1, 0, 1, 2, 3, 4, 5, 6, 7):
+            err, j = self.robot.GetInverseKin(0, list(pose), cfg)
+            if err == 0 and j is not None:
+                joints = list(j)
+                break
+        if joints is None:
+            raise RuntimeError("逆解失败（8 种构型均不可达）")
+        self.move_joints(joints, vel=vel, blocking=blocking)
 
     def wait_done(self, timeout=30.0):
         """阻塞等待当前运动指令执行完成。"""
