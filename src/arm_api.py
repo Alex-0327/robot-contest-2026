@@ -14,9 +14,14 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk", "fairino-python-sdk", "linux"))
+_sdk_dir = os.path.join(os.path.dirname(__file__), "..", "sdk", "fairino-python-sdk", "linux")
+if os.path.isdir(_sdk_dir):
+    sys.path.insert(0, _sdk_dir)
 
-from fairino import Robot  # noqa: E402
+try:
+    from fairino import Robot  # noqa: E402
+except ImportError:  # 现场机：SDK 不在仓库内，用 PYTHONPATH=fairino-python-sdk/linux/fairino 提供
+    import Robot  # noqa: E402
 
 DEFAULT_IP = "192.168.58.2"
 WAYPOINT_FILE = os.path.join(os.path.dirname(__file__), "waypoints.json")
@@ -113,13 +118,17 @@ class Arm:
             json.dump(waypoints, f, indent=2, ensure_ascii=False)
         print(f"航点 [{name}] 已保存: {[round(p, 1) for p in pose]}")
 
-    def goto_waypoint(self, name, vel=20.0):
-        """运动到已保存的命名航点。"""
+    def get_waypoint(self, name):
+        """读取已保存航点的位姿 [x,y,z,rx,ry,rz]（只读取，不运动）。"""
         with open(WAYPOINT_FILE) as f:
             waypoints = json.load(f)
         if name not in waypoints:
             raise KeyError(f"航点 [{name}] 不存在，已有: {list(waypoints)}")
-        self.move_to(waypoints[name], vel=vel)
+        return waypoints[name]
+
+    def goto_waypoint(self, name, vel=20.0):
+        """运动到已保存的命名航点。"""
+        self.move_to(self.get_waypoint(name), vel=vel)
 
     def close(self):
         self.robot.CloseRPC()
