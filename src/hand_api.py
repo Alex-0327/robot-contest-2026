@@ -1,8 +1,7 @@
 """DexHand021 灵巧手动作原语库 —— 分层架构第 2 层。
 
-预成形/捏合角度来自 demo_hand_real.py 的实测起始值，握力上限用
-set_pressure_limit_value（0~20 N）保护毛笔不被捏坏或滑脱。
-所有 *_EXTRA 闭合增量和握力都是现场可调参数，调一次记一次。
+预成形/捏合角度为真机实测值（见各常量注释）。纯位置控制：
+set_pressure_limit 在本固件上会导致电机停在半路，不要用。
 """
 import time
 
@@ -42,11 +41,9 @@ class Hand:
         self._hand.move_joints(**PEN_PRE_GRASP_FINGERS)
         time.sleep(settle)
 
-    def grasp_pen(self, pressure=5, settle=1.5):
-        """握紧：拇指/食指/中指同时闭合（单条指令同时启动，避免中间姿态碰倒笔筒）。
-        拇指走 55°、食指 20°、中指 35°，约 1.5s 内先后到位，pressure 握力上限兜底。"""
-        self._hand.set_pressure_limit_value(pressure)
-        self._hand.set_pressure_limit_enable(True)
+    def grasp_pen(self, settle=1.5):
+        """握紧：拇指/食指/中指同时闭合（单指令同时启动，避免中间姿态碰倒笔筒）。
+        纯位置控制——set_pressure_limit 在本固件上会导致电机停在半路，已弃用。"""
         self._hand.move_joints(**PEN_GRASP_FINGERS, **PEN_GRASP_THUMB)
         time.sleep(settle)
 

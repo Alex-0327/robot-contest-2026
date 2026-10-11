@@ -19,10 +19,10 @@ print("臂：上移 20mm → 落回")
 arm.move_rel(dz=20, vel=5)
 arm.move_rel(dz=-20, vel=5)
 
-print("手：张开 → 预成形 → 捏合(3N) → 张开")
+print("手：张开 → 预成形 → 握紧 → 张开")
 hand.open()
 hand.pre_grasp_pen()
-hand.grasp_pen(pressure=3)
+hand.grasp_pen()
 hand.open()
 
 print("最终位姿:", [round(p, 1) for p in arm.get_pose()])

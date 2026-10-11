@@ -20,7 +20,6 @@ from arm_api import Arm
 from hand_api import Hand
 
 ABOVE_MM = 60       # 悬停点在夹取位上方的高度
-GRASP_PRESSURE = 5  # 握力上限 N（0~20）
 
 suffix = sys.argv[1] if len(sys.argv) > 1 else ""
 waypoint_file = (os.path.join(os.path.dirname(__file__), f"waypoints_{suffix}.json")
@@ -42,8 +41,8 @@ hand.pre_grasp_pen()
 print("慢速下降到夹取位")
 arm.move_to(grasp_pose, vel=5)
 
-print("捏合（%dN）" % GRASP_PRESSURE)
-hand.grasp_pen(pressure=GRASP_PRESSURE)
+print("握紧")
+hand.grasp_pen()
 
 print("抬起")
 arm.move_to(above, vel=5)
