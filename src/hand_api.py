@@ -34,21 +34,20 @@ class Hand:
         self._hand.move_joints(**OPEN)
         time.sleep(settle)
 
-    def pre_grasp_pen(self, settle=1.0):
-        """握笔预成形：先弯食指中指，再把拇指转进来（分步避免对顶）。"""
-        self._hand.move_joints(**PEN_PRE_GRASP_FINGERS)
-        time.sleep(0.8)
+    def pre_grasp_pen(self, settle=0.5):
+        """握笔预成形：拇指先伸直旋转到位（其他手指张开），再预弯食指中指。
+        根部先就位避免捏合时卡到筒口。"""
         self._hand.move_joints(**PEN_PRE_GRASP_THUMB)
+        time.sleep(0.8)
+        self._hand.move_joints(**PEN_PRE_GRASP_FINGERS)
         time.sleep(settle)
 
     def grasp_pen(self, pressure=5, settle=1.5):
-        """从预成形到握紧（10-11 实测角度）：先收食指中指，再弯拇指。
-        pressure 为握力上限（N，0~20）。"""
+        """握紧：拇指/食指/中指同时闭合（单条指令同时启动，避免中间姿态碰倒笔筒）。
+        拇指走 55°、食指 20°、中指 35°，约 1.5s 内先后到位，pressure 握力上限兜底。"""
         self._hand.set_pressure_limit_value(pressure)
         self._hand.set_pressure_limit_enable(True)
-        self._hand.move_joints(**PEN_GRASP_FINGERS)
-        time.sleep(0.8)
-        self._hand.move_joints(**PEN_GRASP_THUMB)
+        self._hand.move_joints(**PEN_GRASP_FINGERS, **PEN_GRASP_THUMB)
         time.sleep(settle)
 
     def check(self):
