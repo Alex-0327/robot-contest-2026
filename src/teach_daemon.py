@@ -13,6 +13,8 @@
     echo "hand open" > /tmp/teach_cmd     # 手张开
     echo "hand pre" > /tmp/teach_cmd      # 手预成形（等笔位）
     echo "hand grasp" > /tmp/teach_cmd    # 手握紧（调定角度）
+    echo "hand s th_rot 0" > /tmp/teach_cmd   # 关节绝对设定（度）
+    echo "hand a ff_mcp -5" > /tmp/teach_cmd  # 关节相对微调（度）
     echo "quit" > /tmp/teach_cmd          # 退出拖动态、切回自动、收尾
 结果读取：
     cat /tmp/teach_result
@@ -69,6 +71,14 @@ try:
             elif cmd == "hand grasp":
                 hand.grasp_pen()
                 report("hand: 已握紧（拇指55 食指70 中指75 同时闭合）")
+            elif cmd.startswith("hand s "):
+                _, _, j, v = cmd.split()
+                hand.set_joint(j, float(v))
+                report(f"hand: {j} = {v}°（绝对）")
+            elif cmd.startswith("hand a "):
+                _, _, j, v = cmd.split()
+                hand.adjust_joint(j, float(v))
+                report(f"hand: {j} 微调 {v}° → 现指令值 {hand.state[j]}°")
             else:
                 report(f"unknown cmd: {cmd}")
         time.sleep(0.3)

@@ -28,25 +28,41 @@ class Hand:
         if not self._hand._initialized:
             raise ConnectionError("CAN 设备初始化失败：检查 USBCANFD 连接与 config.yaml")
         self._hand.clear_errors()
+        self.state = dict(OPEN)  # 固件读不回实际角度，记录最后一次指令值
 
     def open(self, settle=1.0):
         """五指完全张开。"""
         self._hand.move_joints(**OPEN)
+        self.state.update(OPEN)
         time.sleep(settle)
 
     def pre_grasp_pen(self, settle=0.5):
         """握笔预成形：拇指先伸直旋转到位（其他手指张开），再预弯食指中指。
         根部先就位避免捏合时卡到筒口。"""
         self._hand.move_joints(**PEN_PRE_GRASP_THUMB)
+        self.state.update(PEN_PRE_GRASP_THUMB)
         time.sleep(0.8)
         self._hand.move_joints(**PEN_PRE_GRASP_FINGERS)
+        self.state.update(PEN_PRE_GRASP_FINGERS)
         time.sleep(settle)
 
     def grasp_pen(self, settle=1.5):
         """握紧：拇指/食指/中指同时闭合（单指令同时启动，避免中间姿态碰倒笔筒）。
         纯位置控制——set_pressure_limit 在本固件上会导致电机停在半路，已弃用。"""
         self._hand.move_joints(**PEN_GRASP_FINGERS, **PEN_GRASP_THUMB)
+        self.state.update(PEN_GRASP_FINGERS)
+        self.state.update(PEN_GRASP_THUMB)
         time.sleep(settle)
+
+    def set_joint(self, joint, deg, settle=0.6):
+        """绝对设定某关节角度（度）。"""
+        self._hand.move_joints(**{joint: deg})
+        self.state[joint] = deg
+        time.sleep(settle)
+
+    def adjust_joint(self, joint, delta, settle=0.6):
+        """相对微调某关节（基于最后指令值，固件无实际角度回读）。"""
+        return self.set_joint(joint, self.state.get(joint, 0) + delta, settle)
 
     def check(self):
         """打印关节反馈与错误码，返回是否有错误。"""
