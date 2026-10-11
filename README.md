@@ -23,9 +23,10 @@ src/
 
 ## 硬件型号与关键参数（2026-10-09 照片确认 + 官方资料）
 
-机械臂：**法奥 FR3**（白色机身+橙色关节环；负载 3kg / 臂展 622mm / 重复定位 ±0.02mm /
-自重约 15kg；绝对定位精度约 1mm，开环打点必须配视觉闭环）
-- URDF：`sdk/frcobot_ros2/fairino_description/urdf/fairino3_v6.urdf`（配 meshes/fairino3_v6/）
+机械臂：**法奥 FR5**（白色机身+橙色关节环；负载 5kg / 臂展 922mm / 重复定位 ±0.02mm /
+自重约 23kg；绝对定位精度约 1mm，开环打点必须配视觉闭环）
+（2026-10-11 更正：机身铭牌确认是 FR5 不是 FR3，臂展 922mm 覆盖整个纸阵无压力）
+- URDF：`sdk/frcobot_ros2/fairino_description/urdf/fairino5_v6.urdf`（配 meshes/fairino5_v6/）
 - 尺寸图纸/3D 模型：https://fairino-doc-zhs.readthedocs.io/3.9.5/download.html
 - SDK API 手册：https://fr-documentation.readthedocs.io/zh_CN/latest/SDKManual/python_intro.html
 
