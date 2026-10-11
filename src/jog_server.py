@@ -232,6 +232,10 @@ class MockArm:
     def save_waypoint(self, name):
         print(f"[mock] 存航点 {name} = {self.pose}")
 
+    def move_ik(self, pose, vel=10.0, blocking=True):
+        time.sleep(0.3)
+        self.pose = list(pose)
+
 
 _arm = None
 _arm_lock = threading.Lock()    # 建立连接互斥
@@ -310,6 +314,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/goto":
+            # 推算点粗定位：原地抬高→平移→降到悬停高度（纸面附近最后几毫米由人微调）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                gx, gy = float(req["x"]), float(req["y"])
+                hover = float(req.get("z", 195.0))
+                travel = float(req.get("travel_z", 300.0))
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                cur = arm.get_pose()
+                high = cur[:]; high[2] = travel
+                arm.move_ik(high, vel=10)
+                over = [gx, gy, travel, cur[3], cur[4], cur[5]]
+                arm.move_ik(over, vel=10)
+                arm.move_ik([gx, gy, hover, cur[3], cur[4], cur[5]], vel=5)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
         elif self.path == "/api/save":
             try:
                 length = int(self.headers.get("Content-Length", 0))
