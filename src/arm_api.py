@@ -100,6 +100,15 @@ class Arm:
 
     # ---------- 示教与航点 ----------
 
+    def jog(self, axis, direction, step, vel=10.0):
+        """键盘单步点动：axis 1~6（x,y,z,rx,ry,rz），direction ±1，step mm 或 °。
+        在基坐标系下点动，单次最大位移被 max_dis=step 限制。"""
+        error = self.robot.StartJOG(2, axis, 1 if direction > 0 else 0, step, vel=vel)
+        if error != 0:
+            raise RuntimeError(f"StartJOG 失败 err={error}")
+        time.sleep(0.4)
+        self.robot.StopJOG(3)
+
     def set_mode(self, manual=True):
         """切换手动/自动模式。拖动示教必须在手动模式（robot_mode=1）下进行。"""
         error = self.robot.Mode(1 if manual else 0)
