@@ -24,6 +24,10 @@ arm.enable(True)
 print("手进入握笔预成形（先手指后拇指）…")
 hand.pre_grasp_pen()
 
+print("手进入握笔预成形（先手指后拇指）…")
+hand.pre_grasp_pen()
+
+arm.set_mode(True)   # 拖动示教要求手动模式（robot_mode=1）
 arm.drag_teach(True)
 print("拖动示教已开启：手把机械臂拖到目标位置")
 print("输入航点名称回车保存；输入 q 结束")
@@ -37,6 +41,7 @@ while True:
     arm.save_waypoint(name)
 
 arm.drag_teach(False)
+arm.set_mode(False)  # 切回自动模式，后续程序控制用
 hand.open()
 arm.close()
 hand.close()

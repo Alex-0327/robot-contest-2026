@@ -100,8 +100,15 @@ class Arm:
 
     # ---------- 示教与航点 ----------
 
+    def set_mode(self, manual=True):
+        """切换手动/自动模式。拖动示教必须在手动模式（robot_mode=1）下进行。"""
+        error = self.robot.Mode(1 if manual else 0)
+        if error != 0:
+            raise RuntimeError(f"模式切换失败 err={error}")
+
     def drag_teach(self, on=True):
-        """拖动示教开关：on=True 后可以手把机械臂拖到目标位置。"""
+        """拖动示教开关：on=True 后可以手把机械臂拖到目标位置。
+        注意：进入前必须 set_mode(True) 切手动模式，否则 err=-1。"""
         error = self.robot.DragTeachSwitch(1 if on else 0)
         if error != 0:
             raise RuntimeError(f"拖动示教切换失败 err={error}")
