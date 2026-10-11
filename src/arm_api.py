@@ -148,8 +148,12 @@ class Arm:
         if err == 0 and pkg.robot_mode == (1 if manual else 0):
             return
         error = self.robot.Mode(1 if manual else 0)
-        if error != 0:
-            raise RuntimeError(f"模式切换失败 err={error}（先检查控制器是否有未复位报警）")
+        for _ in range(3):
+            if error == 0:
+                return
+            time.sleep(1)  # 关拖动态后立刻切模式会报 err=123，缓 1s 重试
+            error = self.robot.Mode(1 if manual else 0)
+        raise RuntimeError(f"模式切换失败 err={error}（先检查控制器是否有未复位报警）")
 
     def drag_teach(self, on=True):
         """拖动示教开关：on=True 后可以手把机械臂拖到目标位置。
