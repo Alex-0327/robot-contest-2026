@@ -10,6 +10,9 @@
 控制（任何人、任何终端都可发）：
     echo "pose" > /tmp/teach_cmd          # 读当前位姿
     echo "save pen_grasp" > /tmp/teach_cmd  # 保存航点
+    echo "hand open" > /tmp/teach_cmd     # 手张开
+    echo "hand pre" > /tmp/teach_cmd      # 手预成形（等笔位）
+    echo "hand grasp" > /tmp/teach_cmd    # 手握紧（调定角度）
     echo "quit" > /tmp/teach_cmd          # 退出拖动态、切回自动、收尾
 结果读取：
     cat /tmp/teach_result
@@ -57,6 +60,15 @@ try:
                 name = cmd[5:].strip()
                 arm.save_waypoint(name)
                 report(f"saved [{name}]")
+            elif cmd == "hand open":
+                hand.open()
+                report("hand: 已张开")
+            elif cmd == "hand pre":
+                hand.pre_grasp_pen()
+                report("hand: 已预成形（th_rot=70, 食/中指 40/30）")
+            elif cmd == "hand grasp":
+                hand.grasp_pen()
+                report("hand: 已握紧（拇指55 食指70 中指75 同时闭合）")
             else:
                 report(f"unknown cmd: {cmd}")
         time.sleep(0.3)
