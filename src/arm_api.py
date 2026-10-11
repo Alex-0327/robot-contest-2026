@@ -28,13 +28,27 @@ WAYPOINT_FILE = os.path.join(os.path.dirname(__file__), "waypoints.json")
 
 
 class Arm:
-    def __init__(self, ip=DEFAULT_IP, tool=0, user=0):
-        """连接机械臂。tool/user 为示教器里配置的工具/工件坐标系编号。"""
+    def __init__(self, ip=DEFAULT_IP, tool=None, user=None):
+        """连接机械臂。tool/user 默认自动读取控制器当前激活的工具/工件坐标系
+        （10-11 教训：控制柜上激活的是 1 号工具，硬编码 0 会报 err=154 工具不符）。"""
         self.robot = Robot.RPC(ip)
         if self.robot is None:
             raise ConnectionError(f"无法连接机械臂 {ip}")
+        if tool is None or user is None:
+            time.sleep(0.5)  # 等 CNDE 状态流建立
+            err, pkg = self.robot.GetRobotRealTimeState()
+            if err != 0:
+                raise RuntimeError(f"读取控制器状态失败 err={err}")
+            if tool is None:
+                tool = pkg.tool_id
+            if user is None:
+                user = pkg.wobj_id
         self.tool = tool
         self.user = user
+
+    def reset_errors(self):
+        """清除控制器上的可复位报警（运动报错后必须复位才能继续）。"""
+        return self.robot.ResetAllError()
 
     # ---------- 状态读取 ----------
 
