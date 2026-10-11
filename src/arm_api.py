@@ -126,10 +126,14 @@ class Arm:
         self.robot.StopJOG(3)
 
     def set_mode(self, manual=True):
-        """切换手动/自动模式。拖动示教必须在手动模式（robot_mode=1）下进行。"""
+        """切换手动/自动模式。拖动示教必须在手动模式（robot_mode=1）下进行。
+        幂等：已是目标模式时直接返回（重复切换会报 err=14）。"""
+        err, pkg = self.robot.GetRobotRealTimeState()
+        if err == 0 and pkg.robot_mode == (1 if manual else 0):
+            return
         error = self.robot.Mode(1 if manual else 0)
         if error != 0:
-            raise RuntimeError(f"模式切换失败 err={error}")
+            raise RuntimeError(f"模式切换失败 err={error}（先检查控制器是否有未复位报警）")
 
     def drag_teach(self, on=True):
         """拖动示教开关：on=True 后可以手把机械臂拖到目标位置。
