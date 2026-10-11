@@ -1,0 +1,274 @@
+"""网页点动面板 —— 浏览器按钮控制机械臂在 x/y/z 方向微动。
+
+架构：单文件 HTTP 服务（标准库 http.server，零新依赖），跑在连着机械臂的
+Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域网：
+
+    ssh -L 8080:127.0.0.1:8080 user@linux机
+    python src/jog_server.py            # 真机（连接机械臂，首次点击时建立连接）
+    python src/jog_server.py --mock     # 无硬件调试 UI（Mac 上可跑）
+
+然后浏览器打开 http://localhost:8080
+
+注意：控制器同时只应由一个程序下发运动指令。若另有脚本/代理正在操作机械臂，
+不要同时点本页面的按钮（连接懒加载，只开页面不占控制权的说法不成立——
+首次请求就会建立 RPC 连接）。
+"""
+import argparse
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+MAX_STEP_MM = 20.0   # 单次微动步长硬上限
+DEFAULT_VEL = 5.0    # 微动速度 mm/s，宁慢勿快
+AXES = ("x", "y", "z")
+
+INDEX_HTML = """<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>机械臂点动面板</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 560px; margin: 24px auto; padding: 0 12px; }
+  h1 { font-size: 20px; }
+  #pose { font-family: monospace; background: #f4f4f4; padding: 8px 12px; border-radius: 6px; white-space: pre; }
+  .row { margin: 10px 0; }
+  button { font-size: 18px; padding: 12px 20px; margin: 4px; border: 1px solid #ccc;
+           border-radius: 8px; background: #fff; cursor: pointer; min-width: 72px; }
+  button:active { background: #dde; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #estop { background: #d33; color: #fff; border-color: #d33; font-weight: bold; }
+  #msg { min-height: 1.4em; color: #555; }
+  #msg.err { color: #d33; }
+  label { margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>机械臂点动面板</h1>
+<div id="pose">位姿加载中…</div>
+<div class="row">
+  <label>步长
+    <select id="step">
+      <option value="1">1 mm</option>
+      <option value="5" selected>5 mm</option>
+      <option value="10">10 mm</option>
+    </select>
+  </label>
+  <span style="color:#999;font-size:13px">键盘：←→=X ±↑↓=Y，PgUp/PgDn=Z</span>
+</div>
+<div class="row">
+  <button onclick="move('x',-1)">X−</button>
+  <button onclick="move('x', 1)">X+</button>
+</div>
+<div class="row">
+  <button onclick="move('y',-1)">Y−</button>
+  <button onclick="move('y', 1)">Y+</button>
+</div>
+<div class="row">
+  <button onclick="move('z',-1)">Z−</button>
+  <button onclick="move('z', 1)">Z+</button>
+</div>
+<div class="row">
+  <button id="estop" onclick="estop()">急停</button>
+</div>
+<div id="msg"></div>
+<script>
+let busy = false;
+const msgEl = document.getElementById('msg');
+const poseEl = document.getElementById('pose');
+
+function setMsg(t, isErr) { msgEl.textContent = t; msgEl.className = isErr ? 'err' : ''; }
+function showPose(p) {
+  poseEl.textContent = 'x=' + p[0].toFixed(1) + '  y=' + p[1].toFixed(1) +
+    '  z=' + p[2].toFixed(1) + '\\nrx=' + p[3].toFixed(1) + '  ry=' + p[4].toFixed(1) +
+    '  rz=' + p[5].toFixed(1);
+}
+function setButtons(disabled) {
+  document.querySelectorAll('button').forEach(b => { if (b.id !== 'estop') b.disabled = disabled; });
+}
+
+async function move(axis, dir) {
+  if (busy) return;
+  busy = true; setButtons(true); setMsg('运动中…');
+  try {
+    const step = parseFloat(document.getElementById('step').value);
+    const r = await fetch('/api/move', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({axis, dir, step})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('完成');
+  } catch (e) { setMsg('出错：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
+}
+
+async function estop() {
+  try { await fetch('/api/stop', {method: 'POST'}); setMsg('已发送急停'); }
+  catch (e) { setMsg('急停请求失败：' + e.message, true); }
+}
+
+async function refreshPose() {
+  if (busy) return;
+  try {
+    const r = await fetch('/api/pose');
+    const j = await r.json();
+    if (r.ok) showPose(j.pose);
+  } catch (e) { /* 静默，下轮再试 */ }
+}
+
+document.addEventListener('keydown', e => {
+  const map = {ArrowLeft: ['x', -1], ArrowRight: ['x', 1],
+               ArrowDown: ['y', -1], ArrowUp: ['y', 1],
+               PageDown: ['z', -1], PageUp: ['z', 1]};
+  const m = map[e.key];
+  if (m) { e.preventDefault(); move(m[0], m[1]); }
+});
+
+refreshPose();
+setInterval(refreshPose, 2000);
+</script>
+</body>
+</html>
+"""
+
+
+class MockArm:
+    """无硬件调试用的假机械臂：内存里维护一个位姿。"""
+
+    def __init__(self):
+        self.pose = [400.0, 0.0, 300.0, 180.0, 0.0, 0.0]
+
+    def enable(self, on=True):
+        pass
+
+    def get_pose(self):
+        return list(self.pose)
+
+    def move_rel(self, dx=0.0, dy=0.0, dz=0.0, vel=DEFAULT_VEL, blocking=True):
+        time.sleep(0.3)  # 模拟运动耗时
+        self.pose[0] += dx
+        self.pose[1] += dy
+        self.pose[2] += dz
+
+    def stop(self):
+        pass
+
+
+_arm = None
+_arm_lock = threading.Lock()    # 建立连接互斥
+_move_lock = threading.Lock()   # 运动互斥：同一时刻只允许一个微动在执行
+_mock = False
+
+
+def get_arm():
+    """懒加载连接机械臂，首次请求时才建立 RPC 连接。"""
+    global _arm
+    if _arm is None:
+        with _arm_lock:
+            if _arm is None:
+                if _mock:
+                    _arm = MockArm()
+                else:
+                    from arm_api import Arm
+                    _arm = Arm()
+                    _arm.enable(True)
+    return _arm
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "ArmJog/0.1"
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html):
+        body = html.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        pass  # 静默访问日志，错误会显式打印
+
+    def do_GET(self):
+        if self.path == "/":
+            self._send_html(INDEX_HTML)
+        elif self.path == "/api/pose":
+            try:
+                self._send_json({"pose": get_arm().get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        else:
+            self._send_json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        if self.path == "/api/move":
+            self._handle_move()
+        elif self.path == "/api/stop":
+            try:
+                get_arm().stop()
+                self._send_json({"ok": True})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        else:
+            self._send_json({"error": "not found"}, 404)
+
+    def _handle_move(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(length) or b"{}")
+            axis = req["axis"]
+            direction = 1 if float(req["dir"]) > 0 else -1
+            step = min(abs(float(req["step"])), MAX_STEP_MM)
+            if axis not in AXES:
+                raise ValueError(f"未知轴 {axis!r}")
+        except (KeyError, ValueError, TypeError) as e:
+            self._send_json({"error": f"请求参数错误: {e}"}, 400)
+            return
+
+        if not _move_lock.acquire(blocking=False):
+            self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+            return
+        try:
+            arm = get_arm()
+            kwargs = {"d" + axis: direction * step, "vel": DEFAULT_VEL}
+            arm.move_rel(**kwargs)
+            self._send_json({"ok": True, "pose": arm.get_pose()})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+        finally:
+            _move_lock.release()
+
+
+def main():
+    global _mock
+    parser = argparse.ArgumentParser(description="机械臂网页点动面板")
+    parser.add_argument("--mock", action="store_true", help="无硬件调试模式")
+    parser.add_argument("--host", default="127.0.0.1", help="绑定地址（默认仅本机，配合 SSH 转发）")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args()
+    _mock = args.mock
+
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    mode = "MOCK（无硬件）" if _mock else "真机"
+    print(f"点动面板已启动 [{mode}] http://{args.host}:{args.port}")
+    print("SSH 转发：ssh -L {0}:127.0.0.1:{0} user@linux机".format(args.port))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
