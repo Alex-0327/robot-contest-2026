@@ -31,16 +31,24 @@ class Arm:
     def __init__(self, ip=DEFAULT_IP, tool=None, user=None, waypoint_file=None):
         """连接机械臂。tool/user 默认自动读取控制器当前激活的工具/工件坐标系
         （10-11 教训：控制柜上激活的是 1 号工具，硬编码 0 会报 err=154 工具不符）。
-        waypoint_file 默认 waypoints.json，练习时传别的路径避免污染正式航点。"""
+        waypoint_file 默认 waypoints.json，练习时传别的路径避免污染正式航点。
+        注意：CNDE 状态流连接后需预热，所有状态读取都要重试（10-11 教训：
+        不预热会读到垃圾位姿或直接 TypeError）。"""
         self.robot = Robot.RPC(ip)
         if self.robot is None:
             raise ConnectionError(f"无法连接机械臂 {ip}")
         self.waypoint_file = waypoint_file or WAYPOINT_FILE
+        time.sleep(2)  # CNDE 状态流预热
         if tool is None or user is None:
-            time.sleep(0.5)  # 等 CNDE 状态流建立
-            err, pkg = self.robot.GetRobotRealTimeState()
-            if err != 0:
-                raise RuntimeError(f"读取控制器状态失败 err={err}")
+            pkg = None
+            for _ in range(5):
+                res = self.robot.GetRobotRealTimeState()
+                if isinstance(res, tuple) and res[0] == 0:
+                    pkg = res[1]
+                    break
+                time.sleep(1)
+            if pkg is None:
+                raise RuntimeError("控制器状态流未就绪，重连试试")
             if tool is None:
                 tool = pkg.tool_id
             if user is None:
@@ -55,11 +63,19 @@ class Arm:
     # ---------- 状态读取 ----------
 
     def get_pose(self):
-        """当前 TCP 位姿 [x,y,z,rx,ry,rz]，单位 mm / °。"""
+        """当前 TCP 位姿 [x,y,z,rx,ry,rz]，单位 mm / °。读一次校验一次（状态流偶发垃圾值）。"""
         error, pose = self.robot.GetActualTCPPose()
         if error != 0:
             raise RuntimeError(f"读取 TCP 位姿失败 err={error}")
         return pose
+
+    def move_ik(self, pose, vel=10.0, blocking=True):
+        """经逆解走关节空间到目标位姿——大姿态变化（如翻转后升降）用这条，
+        笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。"""
+        err, joints = self.robot.GetInverseKin(0, list(pose))
+        if err != 0:
+            raise RuntimeError(f"逆解失败 err={err}（目标不可达）")
+        self.move_joints(list(joints), vel=vel, blocking=blocking)
 
     def wait_done(self, timeout=30.0):
         """阻塞等待当前运动指令执行完成。"""
