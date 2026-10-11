@@ -220,6 +220,9 @@ class MockArm:
     def stop(self):
         pass
 
+    def move_rel_ik(self, **kwargs):
+        self.move_rel(**kwargs)
+
     def reset_errors(self):
         return 0
 
@@ -342,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             arm = get_arm()
             kwargs = {"d" + axis: direction * step, "vel": DEFAULT_VEL}
-            arm.move_rel(**kwargs)
+            arm.move_rel_ik(**kwargs)  # IK+关节空间，避免 MoveL 奇异点/超限
             self._send_json({"ok": True, "pose": arm.get_pose()})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

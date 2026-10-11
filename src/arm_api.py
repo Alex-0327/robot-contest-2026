@@ -110,6 +110,14 @@ class Arm:
         if blocking:
             self.wait_done()
 
+    def move_rel_ik(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0,
+                    vel=10.0, blocking=True):
+        """相对移动（IK+关节空间）：MoveL 撞奇异点/超限（err=99/112/185）时的替代。"""
+        pose = self.get_pose()
+        target = [pose[0] + dx, pose[1] + dy, pose[2] + dz,
+                  pose[3] + drx, pose[4] + dry, pose[5] + drz]
+        self.move_ik(target, vel=vel, blocking=blocking)
+
     def move_to(self, pose, vel=20.0, blocking=True):
         """绝对移动：笛卡尔直线到指定位姿 [x,y,z,rx,ry,rz]。"""
         error = self.robot.MoveL(list(pose), self.tool, self.user, vel=vel)
