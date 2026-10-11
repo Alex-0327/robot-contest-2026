@@ -13,12 +13,13 @@ OPEN = dict(th_rot=0, th_mcp=0, th_dip=0, ff_spr=0,
             rf_mcp=0, rf_dip=0, lf_mcp=0, lf_dip=0)
 
 # 三指捏（拇指+食指+中指）预成形：手指围成笔的通道，尚未接触
-PEN_PRE_GRASP = dict(th_rot=35, th_mcp=45, th_dip=35,
-                     ff_mcp=65, ff_dip=55, mf_mcp=55, mf_dip=45)
+# 2026-10-11 真机碰撞后砍半的保守值，用 tune_hand.py 单关节实测后再逐步上调
+PEN_PRE_GRASP = dict(th_rot=20, th_mcp=25, th_dip=20,
+                     ff_mcp=35, ff_dip=30, mf_mcp=30, mf_dip=25)
 
-# 在预成形基础上的闭合增量：让指腹贴住笔杆
-PEN_GRASP_EXTRA = dict(th_mcp=15, th_dip=10, ff_mcp=20, ff_dip=15,
-                       mf_mcp=15, mf_dip=10)
+# 在预成形基础上的闭合增量：让指腹贴住笔杆（同为砍半后的保守值）
+PEN_GRASP_EXTRA = dict(th_mcp=8, th_dip=5, ff_mcp=10, ff_dip=8,
+                       mf_mcp=8, mf_dip=5)
 
 
 class Hand:
