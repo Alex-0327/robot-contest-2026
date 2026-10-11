@@ -9,9 +9,9 @@ Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域�
 
 然后浏览器打开 http://localhost:8080
 
-注意：控制器同时只应由一个程序下发运动指令。若另有脚本/代理正在操作机械臂，
-不要同时点本页面的按钮（连接懒加载，只开页面不占控制权的说法不成立——
-首次请求就会建立 RPC 连接）。
+注意：控制器同时只应由一个程序下发运动指令，且 CNDE 状态流只支持单连接。
+运行本面板前必须退出 teach_daemon（echo quit > /tmp/teach_cmd），反之亦然。
+急停后必须点「复位+自动模式」才能继续运动（StopMotion 会锁存停止态）。
 """
 import argparse
 import json
@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_STEP_MM = 20.0   # 单次微动步长硬上限
 DEFAULT_VEL = 5.0    # 微动速度 mm/s，宁慢勿快
-AXES = ("x", "y", "z")
+AXES = ("x", "y", "z", "rx", "ry", "rz")
 
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="zh">
@@ -70,6 +70,28 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="move('z', 1)">Z+</button>
 </div>
 <div class="row">
+  <label>角度步长
+    <select id="rstep">
+      <option value="1">1°</option>
+      <option value="3" selected>3°</option>
+      <option value="5">5°</option>
+    </select>
+  </label>
+</div>
+<div class="row">
+  <button onclick="rmove('rx',-1)">RX−</button>
+  <button onclick="rmove('rx', 1)">RX+</button>
+  <button onclick="rmove('ry',-1)">RY−</button>
+  <button onclick="rmove('ry', 1)">RY+</button>
+  <button onclick="rmove('rz',-1)">RZ−</button>
+  <button onclick="rmove('rz', 1)">RZ+</button>
+</div>
+<div class="row">
+  <input id="wpname" placeholder="航点名，如 paper1_tl" style="font-size:16px;padding:8px;width:220px">
+  <button onclick="savewp()">存航点</button>
+</div>
+<div class="row">
+  <button onclick="resetCtl()">复位+自动模式</button>
   <button id="estop" onclick="estop()">急停</button>
 </div>
 <div id="msg"></div>
@@ -104,8 +126,47 @@ async function move(axis, dir) {
   finally { busy = false; setButtons(false); }
 }
 
+async function rmove(axis, dir) {
+  if (busy) return;
+  busy = true; setButtons(true); setMsg('旋转中…');
+  try {
+    const step = parseFloat(document.getElementById('rstep').value);
+    const r = await fetch('/api/move', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({axis, dir, step})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('完成');
+  } catch (e) { setMsg('出错：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
+}
+
+async function savewp() {
+  const name = document.getElementById('wpname').value.trim();
+  if (!name) { setMsg('先输入航点名', true); return; }
+  try {
+    const r = await fetch('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setMsg('已存航点 [' + name + ']');
+  } catch (e) { setMsg('保存失败：' + e.message, true); }
+}
+
+async function resetCtl() {
+  try {
+    const r = await fetch('/api/reset', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setMsg('已复位，自动模式');
+  } catch (e) { setMsg('复位失败：' + e.message, true); }
+}
+
 async function estop() {
-  try { await fetch('/api/stop', {method: 'POST'}); setMsg('已发送急停'); }
+  try { await fetch('/api/stop', {method: 'POST'}); setMsg('已发送急停（再动之前先点「复位」）', true); }
   catch (e) { setMsg('急停请求失败：' + e.message, true); }
 }
 
@@ -146,14 +207,27 @@ class MockArm:
     def get_pose(self):
         return list(self.pose)
 
-    def move_rel(self, dx=0.0, dy=0.0, dz=0.0, vel=DEFAULT_VEL, blocking=True):
+    def move_rel(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0,
+                 vel=DEFAULT_VEL, blocking=True):
         time.sleep(0.3)  # 模拟运动耗时
         self.pose[0] += dx
         self.pose[1] += dy
         self.pose[2] += dz
+        self.pose[3] += drx
+        self.pose[4] += dry
+        self.pose[5] += drz
 
     def stop(self):
         pass
+
+    def reset_errors(self):
+        return 0
+
+    def set_mode(self, manual=False):
+        pass
+
+    def save_waypoint(self, name):
+        print(f"[mock] 存航点 {name} = {self.pose}")
 
 
 _arm = None
@@ -173,6 +247,9 @@ def get_arm():
                 else:
                     from arm_api import Arm
                     _arm = Arm()
+                    _arm.reset_errors()
+                    time.sleep(1)
+                    _arm.set_mode(False)  # 自动模式才能接受程序运动
                     _arm.enable(True)
     return _arm
 
@@ -217,6 +294,30 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 get_arm().stop()
                 self._send_json({"ok": True})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/reset":
+            # 急停/WebApp停止后控制器锁存停止态，必须先复位再切自动才能继续
+            try:
+                arm = get_arm()
+                arm.reset_errors()
+                time.sleep(1)
+                arm.set_mode(False)
+                arm.enable(True)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/save":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                name = str(req["name"]).strip()
+                if not name:
+                    raise ValueError("航点名不能为空")
+                get_arm().save_waypoint(name)
+                self._send_json({"ok": True})
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
         else:
