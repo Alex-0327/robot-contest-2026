@@ -13,11 +13,12 @@ OPEN = dict(th_rot=0, th_mcp=0, th_dip=0, ff_spr=0,
             rf_mcp=0, rf_dip=0, lf_mcp=0, lf_dip=0)
 
 # 三指捏（拇指+食指+中指）预成形：手指围成笔的通道，尚未接触
-# 2026-10-11 真机碰撞后砍半的保守值，用 tune_hand.py 单关节实测后再逐步上调
-PEN_PRE_GRASP = dict(th_rot=20, th_mcp=25, th_dip=20,
-                     ff_mcp=35, ff_dip=30, mf_mcp=30, mf_dip=25)
+# 10-11 真机教训：拇指内旋和食指外张同时进行会相互对顶，
+# 所以预成形拆成两步——先弯手指，再转拇指。角度≤40° 为实测安全值。
+PEN_PRE_GRASP_FINGERS = dict(ff_mcp=40, ff_dip=30, mf_mcp=40, mf_dip=30)
+PEN_PRE_GRASP_THUMB = dict(th_rot=20, th_mcp=40, th_dip=30)
 
-# 在预成形基础上的闭合增量：让指腹贴住笔杆（同为砍半后的保守值）
+# 在预成形基础上的闭合增量：让指腹贴住笔杆/圆筒（保守值，逐步上调）
 PEN_GRASP_EXTRA = dict(th_mcp=8, th_dip=5, ff_mcp=10, ff_dip=8,
                        mf_mcp=8, mf_dip=5)
 
@@ -35,19 +36,28 @@ class Hand:
         time.sleep(settle)
 
     def pre_grasp_pen(self, settle=1.0):
-        """握笔预成形：三指围出笔的通道，给下降留余量。"""
-        self._hand.move_joints(**PEN_PRE_GRASP)
+        """握笔预成形：先弯食指中指，再把拇指转进来（分步避免对顶）。"""
+        self._hand.move_joints(**PEN_PRE_GRASP_FINGERS)
+        time.sleep(0.8)
+        self._hand.move_joints(**PEN_PRE_GRASP_THUMB)
         time.sleep(settle)
 
     def grasp_pen(self, pressure=5, settle=1.5):
-        """在预成形基础上捏合。pressure 为握力上限（N，0~20），
-        笔滑就调大 PEN_GRASP_EXTRA，笔被捏变形就调小 pressure。"""
+        """在预成形基础上捏合，同样分步：先手指后拇指。
+        pressure 为握力上限（N，0~20），笔滑就调大 PEN_GRASP_EXTRA，
+        笔被捏变形就调小 pressure。"""
         self._hand.set_pressure_limit_value(pressure)
         self._hand.set_pressure_limit_enable(True)
-        target = dict(PEN_PRE_GRASP)
+        fingers = dict(PEN_PRE_GRASP_FINGERS)
+        thumb = dict(PEN_PRE_GRASP_THUMB)
         for k, v in PEN_GRASP_EXTRA.items():
-            target[k] = target.get(k, 0) + v
-        self._hand.move_joints(**target)
+            if k.startswith("th_"):
+                thumb[k] = thumb.get(k, 0) + v
+            else:
+                fingers[k] = fingers.get(k, 0) + v
+        self._hand.move_joints(**fingers)
+        time.sleep(0.8)
+        self._hand.move_joints(**thumb)
         time.sleep(settle)
 
     def check(self):
