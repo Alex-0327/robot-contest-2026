@@ -74,7 +74,9 @@ class Arm:
         笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。
         config=-1（保持当前构型）在臂处于非常规姿态后会假报不可达（err=38），
         因此解出全部 8 种构型，选与当前关节角距离最小的解（10-11 晚教训：
-        取"第一个成功"的构型会翻肘，TCP 轨迹安全但大臂扫到桌面）。"""
+        取"第一个成功"的构型会翻肘，TCP 轨迹安全但大臂扫到桌面）。
+        肘朝下解（J3<0）全局劣后：手动拖动/碰撞冻结会把臂停在肘朝下构型，
+        只锚定"最近"会把错误构型一路继承下去（10-11 深夜两次撞桌的教训）。"""
         err, cur = self.robot.GetActualJointPosDegree()
         if err != 0:
             raise RuntimeError(f"读取关节角失败 err={err}")
@@ -83,6 +85,8 @@ class Arm:
             err, j = self.robot.GetInverseKin(0, list(pose), cfg)
             if err == 0 and j is not None:
                 dist = sum((a - b) ** 2 for a, b in zip(cur, j))
+                if j[2] <= 0:
+                    dist += 1e6  # 肘朝下构型劣后，无肘上解时才用
                 if best is None or dist < best[0]:
                     best = (dist, list(j))
         if best is None:
