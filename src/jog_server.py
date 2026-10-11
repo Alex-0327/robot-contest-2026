@@ -322,6 +322,7 @@ class Handler(BaseHTTPRequestHandler):
                 gx, gy = float(req["x"]), float(req["y"])
                 hover = float(req.get("z", 195.0))
                 travel = float(req.get("travel_z", 300.0))
+                rz = req.get("rz")  # 可选：绕笔轴换手位（远角不可达时转270°）
             except (KeyError, ValueError, TypeError) as e:
                 self._send_json({"error": f"请求参数错误: {e}"}, 400)
                 return
@@ -331,11 +332,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 arm = get_arm()
                 cur = arm.get_pose()
+                rpy = [cur[3], cur[4], float(rz) if rz is not None else cur[5]]
                 high = cur[:]; high[2] = travel
                 arm.move_ik(high, vel=10)
-                over = [gx, gy, travel, cur[3], cur[4], cur[5]]
+                over = [gx, gy, travel] + rpy
                 arm.move_ik(over, vel=10)
-                arm.move_ik([gx, gy, hover, cur[3], cur[4], cur[5]], vel=5)
+                arm.move_ik([gx, gy, hover] + rpy, vel=5)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
