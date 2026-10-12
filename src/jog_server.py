@@ -104,6 +104,7 @@ INDEX_HTML = """<!DOCTYPE html>
 </div>
 <div class="row">
   <button onclick="resetCtl()">复位+自动模式</button>
+  <button onclick="gohome()">回 home</button>
   <button id="estop" onclick="estop()">急停</button>
 </div>
 <div id="msg"></div>
@@ -227,6 +228,19 @@ async function resetCtl() {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setMsg('已复位，自动模式');
   } catch (e) { setMsg('复位失败：' + e.message, true); }
+}
+
+async function gohome() {
+  // 关节空间回 home：不走 IK，任意怪姿态都能回来（奇异/限位恢复用）
+  if (busy) return;
+  busy = true; setButtons(true); setMsg('正在回 home（关节空间）…');
+  try {
+    const r = await fetch('/api/home', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('已回 home');
+  } catch (e) { setMsg('回 home 失败：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
 }
 
 async function estop() {
@@ -456,6 +470,22 @@ class Handler(BaseHTTPRequestHandler):
                 # 只降到航点上方 15mm 悬停：姿态被统一修正过时，原 z 可能已低于纸面，
                 # 最后一段由人手动 Z− 压下去，防止自动下降把笔戳进纸里
                 arm.move_ik([wp[0], wp[1], wp[2] + 15.0, wp[3], wp[4], wp[5]], vel=5)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
+        elif self.path == "/api/home":
+            # 关节空间回 home：不依赖 IK（当前姿态怪异时 move_ik 会在第一段就失败）
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                hj = arm.get_waypoint_joints("home")
+                if hj is None:
+                    raise RuntimeError("home 航点没有关节角（旧格式），先示教重存 home")
+                arm.move_joints(hj, vel=10)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
