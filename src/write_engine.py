@@ -410,9 +410,11 @@ class WriteEngine:
             print(f"[写] 第 {i}/{len(plan['strokes'])} 笔：{len(pts)} 点 / {s['length_mm']:.1f}mm "
                   f"起 ({start[0]:.1f},{start[1]:.1f},{start[2]:.1f})")
             if prev_end is None:
-                # 进字：①原地抬到 5cm ②平移到落点上方 ③下降（三段式，禁止直飞）
+                # 进字：①原地抬 5cm（保持当前姿态——从墨碟出发时写字姿态在墨碟位置超限，
+                # 10-12 实测 8 构型全炸）②平移到落点上方 ③下降（三段式，禁止直飞）
                 cur = self.arm.get_pose()
-                self._vertical(fr.air(cur, SAFE_HOP_MM), "进入前抬到 5cm", vel=TRANSIT_VEL)
+                lifted = list(cur); lifted[2] += SAFE_HOP_MM
+                self._vertical(lifted, "进入前抬到 5cm", vel=TRANSIT_VEL)
                 self._move(fr.air(start, SAFE_HOP_MM), TRANSIT_VEL, "平移到落点上方 5cm")
             else:
                 d = math.dist(start[:2], prev_end[:2])
