@@ -74,6 +74,9 @@ DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
 DESCEND_SLOW_MM = 10.0    # 落笔最后 10mm 慢速段；落差大于此值时空中段先按 TRANSIT_VEL 快落
 TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
+CENTER00_CORR_MM = (8.0, -5.0)  # 锚点修正（右, 上）：十字中心是人眼点的，常偏几 mm。
+                          # 10-12 赛场：第一字左边出格+整行偏下 → 锚点偏左~8 偏下~5。
+                          # 判断依据是写出来的字在格内的位置，比人眼点十字中心更准
 PRESS_MM = -4.0           # 落笔下压量（正=往纸里压，负=抬高）。10-12 实测 PRESS=0 墨色太深 → 抬 4mm
 SHEET_MM = (420.0, 297.0)  # A3 横向（4 张拼成 A1 阵列）
 
@@ -262,8 +265,10 @@ class WriteEngine:
         if sc_name in self.wp and cr_name in self.wp:
             sc, cr = self._need(sc_name), self._need(cr_name)   # 走 _need 解包新格式 dict
             cell_w, cell_h, interp, dev, center00 = self._derive_cell(fr, sc, cr)
+            center00 = (center00[0] + CENTER00_CORR_MM[0],
+                        center00[1] + CENTER00_CORR_MM[1])
             print(f"   [paper{sheet}] 标定实算：格 {cell_w:.2f}×{cell_h:.2f}mm（按「{interp}」反推，"
-                  f"与图纸实测偏差 {dev * 100:.1f}%）")
+                  f"与图纸实测偏差 {dev * 100:.1f}%），锚点修正 {CENTER00_CORR_MM}")
             # 纸角实测 = A3 标准 420mm → 打印比例 1:1，格尺寸/格距直接用图纸值；
             # 标定反推的格宽偏小（十字中心目测误差 2-3mm），列距误差逐列累积会把
             # 后几列顶出格（10-12 整纸压测：第一行后两字靠左出格）。
