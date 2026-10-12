@@ -76,19 +76,40 @@ class Arm:
             raise RuntimeError(f"读取 TCP 位姿失败 err={error}")
         return pose
 
-    def move_ik(self, pose, vel=10.0, blocking=True):
+    def _current_config(self):
+        """当前关节角所属的 IK 构型分支号（0-7）：对当前位姿逐构型求解，
+        取与实读关节角最近的分支。点动锁分支用。"""
+        err, cur = self.robot.GetActualJointPosDegree()
+        if err != 0:
+            raise RuntimeError(f"读取关节角失败 err={err}")
+        pose = self.get_pose()
+        best = None
+        for cfg in range(8):
+            err, j = self.robot.GetInverseKin(0, list(pose), cfg)
+            if err == 0 and j is not None:
+                dist = sum((a - b) ** 2 for a, b in zip(cur, j))
+                if best is None or dist < best[0]:
+                    best = (dist, cfg)
+        if best is None:
+            raise RuntimeError("当前位姿无法判定构型分支")
+        return best[1]
+
+    def move_ik(self, pose, vel=10.0, blocking=True, config=None):
         """经逆解走关节空间到目标位姿——大姿态变化（如翻转后升降）用这条，
         笛卡尔 MoveL 在 ry≈±90 奇异点附近会报 err=99/112。
         config=-1（保持当前构型）在臂处于非常规姿态后会假报不可达（err=38），
         因此解出全部 8 种构型，选与当前关节角距离最小的解（10-11 晚教训：
         取"第一个成功"的构型会翻肘，TCP 轨迹安全但大臂扫到桌面）。
         肘朝下解（J3<0）全局劣后：手动拖动/碰撞冻结会把臂停在肘朝下构型，
-        只锚定"最近"会把错误构型一路继承下去（10-11 深夜两次撞桌的教训）。"""
+        只锚定"最近"会把错误构型一路继承下去（10-11 深夜两次撞桌的教训）。
+        config=None 时全分支择优；指定 config（0-7）时只用该分支——点动必须
+        锁分支，否则逼近限位时选解跳分支，臂会突然做大动作（10-12 br 卡位教训）。"""
         err, cur = self.robot.GetActualJointPosDegree()
         if err != 0:
             raise RuntimeError(f"读取关节角失败 err={err}")
         best = None
-        for cfg in (-1, 0, 1, 2, 3, 4, 5, 6, 7):
+        configs = (config,) if config is not None else (-1, 0, 1, 2, 3, 4, 5, 6, 7)
+        for cfg in configs:
             err, j = self.robot.GetInverseKin(0, list(pose), cfg)
             if err == 0 and j is not None:
                 if any(v < lo + LIMIT_MARGIN or v > hi - LIMIT_MARGIN
@@ -138,11 +159,12 @@ class Arm:
 
     def move_rel_ik(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0,
                     vel=10.0, blocking=True):
-        """相对移动（IK+关节空间）：MoveL 撞奇异点/超限（err=99/112/185）时的替代。"""
+        """相对移动（IK+关节空间）：MoveL 撞奇异点/超限（err=99/112/185）时的替代。
+        锁定当前构型分支：逼近限位时宁可报错也不跳分支做大动作。"""
         pose = self.get_pose()
         target = [pose[0] + dx, pose[1] + dy, pose[2] + dz,
                   pose[3] + drx, pose[4] + dry, pose[5] + drz]
-        self.move_ik(target, vel=vel, blocking=blocking)
+        self.move_ik(target, vel=vel, blocking=blocking, config=self._current_config())
 
     def move_to(self, pose, vel=20.0, blocking=True):
         """绝对移动：笛卡尔直线到指定位姿 [x,y,z,rx,ry,rz]。"""
