@@ -27,12 +27,20 @@ import glob
 import json
 import math
 import os
+import socket
 import sys
 import time
 import urllib.parse
 import urllib.request
 
 import numpy as np
+
+# macOS 上 jsdelivr 的 IPv6 路由经常不通：connect 挂 SYN_SENT 直到超时（每字白等 20s）。
+# 强制 urllib 只走 IPv4（10-12 赛场实测：IPv4 1-2s/字，IPv6 必卡死）
+_orig_getaddrinfo = socket.getaddrinfo
+def _ipv4_getaddrinfo(*a, **kw):
+    return [r for r in _orig_getaddrinfo(*a, **kw) if r[0] == socket.AF_INET]
+socket.getaddrinfo = _ipv4_getaddrinfo
 
 # ---------------- 坐标基准（把数据集坐标搬进田字格） ----------------
 # 数据集坐标：y 轴向上、基线在 y=0；楷体设计里"满格字"大致落在 x∈[60,960]、y∈[-40,860]。
