@@ -77,19 +77,34 @@ def main():
         arm.reset_errors()
         arm.set_mode(False)
         arm.enable(True)
+
+        # 启动保护：笔尖若还贴/近纸面（刚标定完的状态），先小幅垂直抬升。
+        # 长距离 MoveJ 从贴面直接起步，TCP 弧线会先下压（10-12 赛场笔捅桌面事故）
+        cur = arm.get_pose()
+        plane_z = fr.point(*fr.to_local(cur), dz_mm=0)[2]
+        if cur[2] < plane_z + 30.0:
+            print("笔尖近纸面，先垂直抬 50mm 再转场", flush=True)
+            up = cur[:]; up[2] = plane_z + 50.0
+            arm.move_ik(up, vel=5)
+
         # 到第一个角点上方
         arm.move_ik(fr.point(corners[0][1], corners[0][2], dz_mm=LIFT_MM), vel=MOVE_VEL)
-        arm.move_ik(fr.point(corners[0][1], corners[0][2], dz_mm=HOVER_MM), vel=MOVE_VEL)
+        arm.move_ik(fr.point(corners[0][1], corners[0][2], dz_mm=HOVER_MM), vel=5)
         for i in range(len(corners)):
             nxt = corners[(i + 1) % len(corners)]
             print(f"描 {corners[i][0]} -> {nxt[0]}，看笔尖是否贴着印刷线走", flush=True)
-            arm.move_ik(fr.point(nxt[1], nxt[2], dz_mm=HOVER_MM), vel=TRACE_VEL)
+            # 描边必须 MoveL（笛卡尔直线）且分段：MoveJ 的 TCP 轨迹是不可控弧线，
+            # 近纸面会捅桌子/画不出直线，长边 MoveL 一次走易触发奇异点报错
+            x0, y0 = corners[i][1], corners[i][2]
+            for k in range(1, 5):
+                x = x0 + (nxt[1] - x0) * k / 4.0
+                y = y0 + (nxt[2] - y0) * k / 4.0
+                arm.move_to(fr.point(x, y, dz_mm=HOVER_MM), vel=TRACE_VEL)
             time.sleep(2.0)
             if i < len(corners) - 1:
                 arm.move_ik(fr.point(nxt[1], nxt[2], dz_mm=LIFT_MM), vel=MOVE_VEL)
-                arm.move_ik(fr.point(nxt[1], nxt[2], dz_mm=HOVER_MM), vel=MOVE_VEL)
+                arm.move_ik(fr.point(nxt[1], nxt[2], dz_mm=HOVER_MM), vel=5)
         # 收尾抬高
-        p = arm.get_pose()
         arm.move_ik(fr.point(corners[0][1], corners[0][2], dz_mm=LIFT_MM), vel=MOVE_VEL)
         print("校验完成。四条边都贴线 = 标定系正确；哪条边飘 = 重采对应角点")
     finally:
