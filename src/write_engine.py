@@ -11,8 +11,10 @@
 
 依赖的航点（src/waypoints.json）
     每张纸 4 个角：paper{1..4}_{tl,tr,bl,br}      ← 建系用；第 4 角做校验（误差>5mm 报错）
-    田字格标定：  paper{i}_cell00_tl              ← 第 0 个田字格的【左上小格中心】
-                  paper{i}_cell00_corner_tr       ← 第 0 个田字格的【右上角】（待重采）
+    田字格标定：  paper{i}_cell00_tl              ← 第 0 个田字格的【十字中心】或【左上小格中心】
+                  paper{i}_cell00_corner_tr       ← 第 0 个田字格的【右上角】
+                  （cell00_tl 两种语义都支持，_derive_cell 自动选与图纸最接近的解释；
+                   推荐点十字中心——有线可对，比目测小格中心准得多）
     既有：        home / pen_grasp / pen_lift / ink_pre / ink_dip
 
 坐标系约定
@@ -246,9 +248,7 @@ class WriteEngine:
         cr_name = f"paper{sheet}_cell00_corner_tr"    # 第 0 个田字格的右上角
         if sc_name in self.wp and cr_name in self.wp:
             sc, cr = self._need(sc_name), self._need(cr_name)   # 走 _need 解包新格式 dict
-            cell_w, cell_h, interp, dev = self._derive_cell(fr, sc, cr)
-            sx, sy = fr.to_local(sc)
-            center00 = (sx + cell_w / 4.0, sy + cell_h / 4.0)
+            cell_w, cell_h, interp, dev, center00 = self._derive_cell(fr, sc, cr)
             print(f"   [paper{sheet}] 标定实算：格 {cell_w:.2f}×{cell_h:.2f}mm（按「{interp}」反推，"
                   f"与图纸实测偏差 {dev * 100:.1f}%）")
             ratio = cell_w / MEAS_CELL_MM[0]
@@ -280,30 +280,32 @@ class WriteEngine:
 
     @staticmethod
     def _derive_cell(fr, sub_center_pose, corner_pose):
-        """由【左上小格中心】+【右上角点】反推田字格大小。
+        """由【标定点】+【右上角点】反推田字格大小，并给出第 0 格田字格中心。
 
-        这两个点的语义有歧义（右上角可能是"田字格的右上角"，也可能是"左上小格自己的右上角"），
-        所以两种解释都算一遍，取与官方图纸实测值最接近的那个，并把用了哪种解释打印出来。
-        """
+        cell00_tl 的语义现场容易点错（目测"小格中心"没有线可对，10-12 实测点成
+        十字中心的概率很大），所以三种解释都算一遍，取与官方图纸实测值最接近的。
+        返回 (cell_w, cell_h, 解释名, 偏差, center00局部坐标)。"""
         sx, sy = fr.to_local(sub_center_pose)
         cx, cy = fr.to_local(corner_pose)
         dx, dy_up = cx - sx, sy - cy                 # 中心→右边框 / 中心→上边框
         cands = [("小格中心→田字格右上角", 4.0 / 3.0 * dx, 4.0 * dy_up),
-                 ("小格中心→小格右上角", 4.0 * dx, 4.0 * dy_up)]
+                 ("小格中心→小格右上角", 4.0 * dx, 4.0 * dy_up),
+                 ("田字格十字中心→田字格右上角", 2.0 * dx, 2.0 * dy_up)]
         scored = []
         for name, w, h in cands:
             if w > 5 and h > 5:
                 dev = max(abs(w / MEAS_CELL_MM[0] - 1.0), abs(h / MEAS_CELL_MM[1] - 1.0))
-                scored.append((dev, name, w, h))
+                c00 = (sx, sy) if name.startswith("田字格") else (sx + w / 4.0, sy + h / 4.0)
+                scored.append((dev, name, w, h, c00))
         if not scored:
             raise RuntimeError(
                 f"标定关系对不上：两个点反推出的格尺寸是负数/零（dx={dx:.1f}, dy_up={dy_up:.1f}）。"
-                f"检查 cell00_tl 是不是【左上小格中心】、cell00_corner_tr 是不是【右上角点】")
+                f"检查 cell00_tl（十字中心或小格中心）、cell00_corner_tr（右上角点）")
         scored.sort(key=lambda t: t[0])
-        dev, name, w, h = scored[0]
+        dev, name, w, h, c00 = scored[0]
         if dev > 0.30:
             print(f"★ 格尺寸反推与图纸差 {dev * 100:.0f}%（{name}）→ 先复核这两个标定点的位置定义")
-        return w, h, name, dev
+        return w, h, name, dev, c00
 
     def cell_center_pose(self, sheet=1, row=1, col=1):
         fr, g = self.frame(sheet), self.grid(sheet)
