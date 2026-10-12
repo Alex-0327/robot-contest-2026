@@ -59,6 +59,9 @@ SAFE_HOP_MM = 50.0        # 进入/离开一个字时的高度（任务书要求
 TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（墨碟上方 z≈291，再抬 50 不可达 err=38）
 SHORT_MOVE_MM = 12.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
 WRITE_VEL = 4.0           # 走笔速度（≤5；3→4：10-12 整纸压测 347s 后提速）
+TRACE_BLEND_MM = 1.2      # 走笔 MoveL 转角平滑半径（非阻塞连发，10-11 write_api 已验证模式）；
+                          # 折线顶点不停顿：省每段 ~0.2-0.4s 阻塞开销，拐角也不积墨。设 0 退回逐段阻塞
+TRACE_CHUNK = 8           # 每连发多少段 MoveL 等一次（与 write_api.chunk 一致，防爆队列）
 DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
 TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
@@ -390,6 +393,43 @@ class WriteEngine:
         except Exception as e:                                 # noqa: BLE001
             raise RuntimeError(f"{why} 失败：MoveL 与 move_ik 都走不通 → {e}") from e
 
+    def _trace(self, pts, why):
+        """走笔：MoveL 带 blendR 平滑半径【非阻塞连发】，一笔只在末尾等一次，
+        省掉逐段阻塞的通讯/等待开销（645 点/20 字，逐段阻塞是最大的隐性耗时）。
+        任一段下发失败（IK 预检不过）就排空队列、复位后把剩余段退回逐段阻塞老路
+        （保留 _move 的 move_ik 奇异点兜底），绝不少写一段。"""
+        if len(pts) < 2:
+            return
+        if TRACE_BLEND_MM <= 0:
+            for j, p in enumerate(pts[1:], 1):
+                self._move(p, WRITE_VEL, f"{why}第{j}段")
+            return
+        segs = pts[1:]
+        sent = 0
+        try:
+            for i in range(0, len(segs), TRACE_CHUNK):
+                grp = segs[i:i + TRACE_CHUNK]
+                for k, p in enumerate(grp):
+                    last = (i + k) == len(segs) - 1          # 末段不混叠：精确停笔再抬
+                    err = self.arm.robot.MoveL(list(p), self.arm.tool, self.arm.user,
+                                               vel=WRITE_VEL, ovl=100.0,
+                                               blendR=(0.0 if last else TRACE_BLEND_MM))
+                    if err != 0:
+                        raise RuntimeError(f"MoveL 下发 err={err}")
+                    sent += 1
+                self.arm.wait_done()
+            return
+        except Exception as e:                                 # noqa: BLE001
+            print(f"  [走笔] 混合连发中断（{e}）→ 排空队列后退回逐段阻塞")
+            try:
+                self.arm.wait_done()
+            except Exception:                                  # noqa: BLE001
+                pass
+            self.arm.reset_errors()
+            self.arm.enable(True)
+            for j, p in enumerate(segs[sent:], sent + 1):
+                self._move(p, WRITE_VEL, f"{why}第{j}段(阻塞兜底)")
+
     def _vertical(self, pose, why, vel=DESCEND_VEL):
         """垂直升降一律 move_ik（翻腕姿态下 MoveL 会撞奇异点）。"""
         try:
@@ -440,8 +480,7 @@ class WriteEngine:
                     self._vertical(fr.air(prev_end, SAFE_HOP_MM), "跨笔画抬到 5cm", vel=TRANSIT_VEL)
                     self._move(fr.air(start, SAFE_HOP_MM), TRANSIT_VEL, "平移到下一笔上方")
             self._vertical(start, f"第{i}笔落笔")        # ③下降
-            for j, p in enumerate(pts[1:], 1):
-                self._move(p, WRITE_VEL, f"第{i}笔第{j}段")
+            self._trace(pts, f"第{i}笔")
             self._vertical(fr.air(end, RETRACT_MM), f"第{i}笔抬笔")
             prev_end = list(end)
         print(f"[写] 「{ch}」完成：{len(plan['strokes'])} 笔 / {plan['total_mm']:.0f}mm")
