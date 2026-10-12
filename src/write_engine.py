@@ -58,9 +58,9 @@ RETRACT_MM = 5.0          # 笔画间抬笔高度（任务书要求 5mm 换笔�
 SAFE_HOP_MM = 50.0        # 进入/离开一个字时的高度（任务书要求先到落点上方 5cm）
 TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（墨碟上方 z≈291，再抬 50 不可达 err=38）
 SHORT_MOVE_MM = 12.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
-WRITE_VEL = 3.0           # 走笔速度（≤5）
+WRITE_VEL = 4.0           # 走笔速度（≤5；3→4：10-12 整纸压测 347s 后提速）
 DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
-TRANSIT_VEL = 10.0        # 转场速度（≤10）
+TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
 PRESS_MM = -4.0           # 落笔下压量（正=往纸里压，负=抬高）。10-12 实测 PRESS=0 墨色太深 → 抬 4mm
 SHEET_MM = (420.0, 297.0)  # A3 横向（4 张拼成 A1 阵列）
@@ -252,12 +252,12 @@ class WriteEngine:
             cell_w, cell_h, interp, dev, center00 = self._derive_cell(fr, sc, cr)
             print(f"   [paper{sheet}] 标定实算：格 {cell_w:.2f}×{cell_h:.2f}mm（按「{interp}」反推，"
                   f"与图纸实测偏差 {dev * 100:.1f}%）")
-            ratio = cell_w / MEAS_CELL_MM[0]
-            if abs(ratio - 1.0) > 0.25:
-                print(f"★ [paper{sheet}] 实算格宽 {cell_w:.1f}mm 与图纸 {MEAS_CELL_MM[0]:.1f}mm "
-                      f"差 {ratio:.2f} 倍：打印比例可能不是 A3 放大 → 按实算值继续，但请复核")
-            g = Grid(cell_w, cell_h, MEAS_COL_PITCH * ratio, MEAS_ROW_PITCH * ratio,
-                     center00, GRID_ROWS, GRID_COLS, "from_calib")
+            # 纸角实测 = A3 标准 420mm → 打印比例 1:1，格尺寸/格距直接用图纸值；
+            # 标定反推的格宽偏小（十字中心目测误差 2-3mm），列距误差逐列累积会把
+            # 后几列顶出格（10-12 整纸压测：第一行后两字靠左出格）。
+            # 标定点只用来定 center00（第 0 格中心锚点），不用来定格尺寸。
+            g = Grid(MEAS_CELL_MM[0], MEAS_CELL_MM[1], MEAS_COL_PITCH, MEAS_ROW_PITCH,
+                     center00, GRID_ROWS, GRID_COLS, "from_calib+pdf_grid")
         else:
             cell_w, cell_h = MEAS_CELL_MM
             center00 = (MEAS_MARGIN_LR + cell_w / 2.0, MEAS_MARGIN_TB + cell_h / 2.0)
