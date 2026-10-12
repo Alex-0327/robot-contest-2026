@@ -1,0 +1,50 @@
+{
+  "poem": "一去二三里烟村四五家",
+  "poem_full": "一去二三里烟村四五家亭台六七座八九十枝花",
+  "poem_title": "《山村咏怀》宋·邵雍（前十字版：够 2 个连续 5 字奖励）",
+  "sheet": "backL",
+  "row": 2,
+  "col_start": 1,
+  "layout": "a3_scaled",
+  "allow_wrap": true,
+  "time_budget_s": 300,
+  "guard_s": 45,
+  "waypoint_file": "src/waypoints.json",
+  "return_home": false,
+  "reachability": {
+    "band_mm": [
+      150.0,
+      700.0
+    ],
+    "note": "距臂基座水平距离(mm)的安全区间；太近腕关节易超限，太远够不到。FR3 臂展 622mm"
+  },
+  "motion": {
+    "write_vel": 15.0,
+    "travel_vel": 40.0,
+    "descend_vel": 12.0,
+    "lift_vel": 30.0,
+    "clearance_mm": 8.0,
+    "travel_clearance_mm": 30.0,
+    "blend_mm": 1.2,
+    "press_mm": 0.3,
+    "point_overhead_s": 0.15
+  },
+  "dip": {
+    "pre_dip": true,
+    "every_strokes": 12,
+    "every_mm": 0,
+    "depth_mm": 3.0,
+    "dwell_s": 1.2,
+    "drip_s": 0.8,
+    "dip_cost_s": 9.0
+  },
+  "_notes": [
+    "★ allow_wrap=true：第一排 5 格写满后自动换到同一张纸的另一排（连续 5 字才有奖励）",
+    "★ 换排前先看 demo_write_poem.py 打印的可达性：太近的格子（<200mm）腕关节容易超限",
+    "★ poem 用哪个版本由时间决定：先 --dry-run 看估算，别到现场才发现写不完",
+    "★ dip.every_strokes / every_mm 必须实测：一次蘸墨能连续写多少 mm 笔长，量出来再改",
+    "★ 时间预算 300s：留 45s 熔断 + 30s 设备复原（规则：超时 -50，未复原再 -50）",
+    "★ press_mm 落笔下压量：墨太淡就 0.3 → 0.5；纸面出现晕染/墨团就 → 0.1",
+    "★ layout 选错后果很严重：打印出来量一格，76.9mm 用 a3_scaled，54.4mm 用 a4_raw"
+  ]
+}
