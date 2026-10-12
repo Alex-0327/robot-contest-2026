@@ -105,6 +105,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <div class="row">
   <button onclick="resetCtl()">复位+自动模式</button>
   <button onclick="gohome()">回 home</button>
+  <button onclick="pickPen()">一键拿笔+抬起</button>
   <button id="estop" onclick="estop()">急停</button>
 </div>
 <div id="msg"></div>
@@ -248,6 +249,20 @@ async function estop() {
   catch (e) { setMsg('急停请求失败：' + e.message, true); }
 }
 
+async function pickPen() {
+  // 一键拿笔：复用 demo_pick_pen 已验证序列（张手→笔上方→预成形→下降→握紧→抬起悬空）
+  if (busy) return;
+  if (!confirm('确认执行一键拿笔？笔须在笔架初始位，机械臂将自动下降抓握')) return;
+  busy = true; setButtons(true); setMsg('拿笔中（约20秒）：张手→到位→抓握→抬起…');
+  try {
+    const r = await fetch('/api/pick_pen', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('已拿笔并抬起悬空，请手动确认捏持牢固');
+  } catch (e) { setMsg('拿笔失败：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
+}
+
 async function refreshPose() {
   if (busy) return;
   try {
@@ -328,11 +343,31 @@ class MockArm:
         time.sleep(0.3)
         self.pose = list(pose)
 
+    def move_to(self, pose, vel=10.0, blocking=True):
+        self.move_ik(pose, vel, blocking)
+
+    def get_waypoint_joints(self, name):
+        return None
+
 
 _arm = None
 _arm_lock = threading.Lock()    # 建立连接互斥
 _move_lock = threading.Lock()   # 运动互斥：同一时刻只允许一个微动在执行
 _mock = False
+_hand = None
+
+
+def get_hand():
+    """懒加载连接灵巧手（CAN）。mock 模式返回 None，调用方跳过手部动作。"""
+    global _hand
+    if _mock:
+        return None
+    if _hand is None:
+        with _arm_lock:
+            if _hand is None:
+                from hand_api import Hand
+                _hand = Hand()
+    return _hand
 
 
 def get_arm():
@@ -486,6 +521,33 @@ class Handler(BaseHTTPRequestHandler):
                 if hj is None:
                     raise RuntimeError("home 航点没有关节角（旧格式），先示教重存 home")
                 arm.move_joints(hj, vel=10)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
+        elif self.path == "/api/pick_pen":
+            # 一键拿笔+抬起悬空：复用 demo_pick_pen 已验证序列
+            # （张手→笔上方60mm→预成形→慢降→握紧→抬回→再升到150mm悬空）
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                hand = get_hand()
+                grasp_pose = arm.get_waypoint("pen_grasp")
+                above = list(grasp_pose); above[2] += 60.0
+                hover = list(grasp_pose); hover[2] += 150.0
+                if hand:
+                    hand.open()
+                arm.move_ik(above, vel=10)
+                if hand:
+                    hand.pre_grasp_pen()
+                arm.move_to(grasp_pose, vel=5)
+                if hand:
+                    hand.grasp_pen()
+                arm.move_to(above, vel=5)
+                arm.move_ik(hover, vel=10)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
