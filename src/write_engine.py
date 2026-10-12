@@ -74,9 +74,11 @@ DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
 DESCEND_SLOW_MM = 10.0    # 落笔最后 10mm 慢速段；落差大于此值时空中段先按 TRANSIT_VEL 快落
 TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
-CENTER00_CORR_MM = (13.0, -5.0)  # 锚点修正（右, 上）：十字中心是人眼点的，常偏几 mm。
-                          # 10-12 赛场：第一字左边出格 → +8 后左间距 5mm（理论居中 11）再 +5；
-                          # 垂直待 d1/d2 实测后定（锚点偏差与行距误差要分开）
+CENTER00_CORR_MM = (13.0, -15.0)  # 锚点修正（右, 上）：十字中心是人眼点的，常偏几 mm。
+                          # 10-12 赛场尺子实测：第一行字低于中线 15mm（无修正）→ 垂直 -15；
+                          # 水平 +8 后左间距 5mm（居中应 ~11）→ +13
+ROW_PITCH_CORR_MM = -2.0  # 行距修正：10-12 实测第二行字低 12mm（= 15 - 5锚修 + 行距误差）
+                          # → 图纸行距 108.28 比真实大 2mm，用 106.28
 PRESS_MM = -4.0           # 落笔下压量（正=往纸里压，负=抬高）。10-12 实测 PRESS=0 墨色太深 → 抬 4mm
 SHEET_MM = (420.0, 297.0)  # A3 横向（4 张拼成 A1 阵列）
 
@@ -273,7 +275,8 @@ class WriteEngine:
             # 标定反推的格宽偏小（十字中心目测误差 2-3mm），列距误差逐列累积会把
             # 后几列顶出格（10-12 整纸压测：第一行后两字靠左出格）。
             # 标定点只用来定 center00（第 0 格中心锚点），不用来定格尺寸。
-            g = Grid(MEAS_CELL_MM[0], MEAS_CELL_MM[1], MEAS_COL_PITCH, MEAS_ROW_PITCH,
+            g = Grid(MEAS_CELL_MM[0], MEAS_CELL_MM[1], MEAS_COL_PITCH,
+                     MEAS_ROW_PITCH + ROW_PITCH_CORR_MM,
                      center00, GRID_ROWS, GRID_COLS, "from_calib+pdf_grid")
         else:
             cell_w, cell_h = MEAS_CELL_MM
