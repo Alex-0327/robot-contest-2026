@@ -22,7 +22,7 @@ from write_engine import (SheetFrame, Grid, WriteEngine,
                           MEAS_CELL_MM, MEAS_COL_PITCH, MEAS_ROW_PITCH,
                           GRID_ROWS, GRID_COLS)
 
-HOVER_MM = 3.0      # 描线时笔尖离纸高度
+HOVER_MM = -9.0     # 描线时笔尖离纸高度。原 3mm；10-12 下午笔短了 12mm → 3-12=-9 保持笔尖悬 3mm
 LIFT_MM = 40.0      # 角点间转移的抬高
 TRACE_VEL = 5.0     # 描线速度（慢，方便肉眼跟）
 MOVE_VEL = 10.0
