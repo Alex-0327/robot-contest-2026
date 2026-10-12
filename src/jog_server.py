@@ -16,9 +16,16 @@ pose+joints 同时落盘）。
 注意：控制器同时只应由一个程序下发运动指令，且 CNDE 状态流只支持单连接。
 运行本面板前必须退出 teach_daemon（echo quit > /tmp/teach_cmd），反之亦然。
 急停后必须点「复位+自动模式」才能继续运动（StopMotion 会锁存停止态）。
+
+页面下方是「写字」区块（决赛流程）：公布诗题后在面板输入诗文 → 检查字库 →
+预览（dry_run，不动硬件）→ 开始书写（先蘸墨再整首写完）。写字在后台线程跑，
+复用本进程已有的 arm/hand 连接（CNDE 只允许单客户端，绝不能再起 Arm()）；
+运行期间所有会动机械臂/灵巧手的按钮和接口都被锁住，急停除外。
 """
 import argparse
+import contextlib
 import json
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +53,11 @@ INDEX_HTML = """<!DOCTYPE html>
   #msg { min-height: 1.4em; color: #555; }
   #msg.err { color: #d33; }
   label { margin-right: 8px; }
+  #wtext { width: 100%; font-size: 16px; padding: 8px; box-sizing: border-box; }
+  #wresult { font-size: 14px; line-height: 1.9; }
+  #wlog { background: #111; color: #7f7; padding: 8px 12px; border-radius: 6px;
+          height: 180px; overflow: auto; font-size: 12px; display: none; white-space: pre-wrap; }
+  #wstop { background: #e80; color: #fff; border-color: #e80; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -113,9 +125,44 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="handCmd('pre')">预抓握</button>
   <button onclick="handCmd('grasp')">抓握</button>
 </div>
+<hr>
+<h1 style="font-size:18px">写字（比赛流程）</h1>
+<div class="row">
+  <textarea id="wtext" rows="3" placeholder="输入诗文，如：一去二三里烟村四五家（不要带标点）"></textarea>
+</div>
+<div class="row">
+  <label>起始纸
+    <select id="wsheet" style="font-size:16px;padding:4px">
+      <option value="1" selected>1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option>
+    </select>
+  </label>
+  <label>起始行
+    <select id="wrow" style="font-size:16px;padding:4px">
+      <option value="1" selected>1</option><option value="2">2</option>
+    </select>
+  </label>
+  <label>起始列
+    <select id="wcol" style="font-size:16px;padding:4px">
+      <option value="1" selected>1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+    </select>
+  </label>
+  <label style="font-size:14px"><input type="checkbox" id="wcomplex" checked>含复杂字</label>
+</div>
+<div class="row">
+  <button onclick="wcheck()">检查字库</button>
+  <button onclick="wpreview()">预览</button>
+  <button onclick="wdip()">蘸墨</button>
+  <button onclick="wstart()">开始书写</button>
+  <button id="wstop" onclick="wstop()" disabled>停止</button>
+</div>
+<div id="wresult"></div>
+<pre id="wlog"></pre>
 <div id="msg"></div>
 <script>
 let busy = false;
+let writeActive = false;   // 写字/蘸墨后台任务运行中：锁住一切会动机械臂的操作
 const msgEl = document.getElementById('msg');
 const poseEl = document.getElementById('pose');
 
@@ -126,11 +173,14 @@ function showPose(p) {
     '  rz=' + p[5].toFixed(1);
 }
 function setButtons(disabled) {
-  document.querySelectorAll('button').forEach(b => { if (b.id !== 'estop') b.disabled = disabled; });
+  // estop=硬件急停、wstop=写字停止，任何时候都不能禁用
+  document.querySelectorAll('button').forEach(b => {
+    if (b.id !== 'estop' && b.id !== 'wstop') b.disabled = disabled;
+  });
 }
 
 async function move(axis, dir) {
-  if (busy) return;
+  if (busy || writeActive) return;
   busy = true; setButtons(true); setMsg('运动中…');
   try {
     const step = parseFloat(document.getElementById('step').value);
@@ -146,7 +196,7 @@ async function move(axis, dir) {
 }
 
 async function rmove(axis, dir) {
-  if (busy) return;
+  if (busy || writeActive) return;
   busy = true; setButtons(true); setMsg('旋转中…');
   try {
     const step = parseFloat(document.getElementById('rstep').value);
@@ -197,7 +247,7 @@ async function loadWps() {
 async function gotoWp() {
   const name = document.getElementById('wpsel').value;
   if (!name) { setMsg('先选一个航点', true); return; }
-  if (busy) return;
+  if (busy || writeActive) return;
   const exact = document.getElementById('goexact').checked;
   busy = true; setButtons(true); setMsg('正在去航点 [' + name + ']（抬高→平移→降下）…');
   try {
@@ -241,7 +291,7 @@ async function resetCtl() {
 
 async function gohome() {
   // 关节空间回 home：不走 IK，任意怪姿态都能回来（奇异/限位恢复用）
-  if (busy) return;
+  if (busy || writeActive) return;
   busy = true; setButtons(true); setMsg('正在回 home（关节空间）…');
   try {
     const r = await fetch('/api/home', {method: 'POST'});
@@ -258,6 +308,7 @@ async function estop() {
 }
 
 async function handCmd(action) {
+  if (writeActive) { setMsg('写字进行中，禁止手部动作（手握着笔）', true); return; }
   const names = {open: '伸直', pre: '预抓握', grasp: '抓握'};
   setMsg('灵巧手：' + names[action] + '…');
   try {
@@ -272,7 +323,8 @@ async function handCmd(action) {
 }
 
 async function refreshPose() {
-  if (busy) return;
+  // 写字期间不并发读位姿：fairino RPC 与写字线程共用一条连接，避免交错
+  if (busy || writeActive) return;
   try {
     const r = await fetch('/api/pose');
     const j = await r.json();
@@ -288,8 +340,126 @@ document.addEventListener('keydown', e => {
   if (m) { e.preventDefault(); move(m[0], m[1]); }
 });
 
+// ---------------- 写字区块 ----------------
+const wlogEl = document.getElementById('wlog');
+const wresEl = document.getElementById('wresult');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function wres(html) { wresEl.innerHTML = html; }
+
+function wparams() {
+  return {
+    text: document.getElementById('wtext').value,
+    sheet: parseInt(document.getElementById('wsheet').value),
+    row: parseInt(document.getElementById('wrow').value),
+    col: parseInt(document.getElementById('wcol').value),
+    allow_complex: document.getElementById('wcomplex').checked
+  };
+}
+
+async function wpost(path, body) {
+  const r = await fetch(path, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body || {})
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+async function wcheck() {
+  const p = wparams();
+  if (!p.text.trim()) { wres('<span style="color:#d33">先输入诗文</span>'); return; }
+  wres('检查字库中…');
+  try {
+    const j = await wpost('/api/write_check', {text: p.text});
+    let html = '共 ' + j.unique + ' 个不同字：';
+    j.chars.forEach(c => {
+      html += c.ok ? '<span style="color:#282">' + esc(c.ch) + '</span> '
+                   : '<span style="color:#d33;font-weight:bold;background:#fdd">'
+                     + esc(c.ch) + '</span> ';
+    });
+    if (j.missing.length) {
+      html += '<br><b style="color:#d33">缺字无法书写，需联网预抓或换字：'
+              + j.missing.map(esc).join(' ') + '</b>';
+    } else {
+      html += '<br><b style="color:#282">✓ 字库齐全，可以书写</b>';
+    }
+    wres(html);
+  } catch (e) { wres('<span style="color:#d33">检查失败：' + esc(e.message) + '</span>'); }
+}
+
+async function wpreview() {
+  const p = wparams();
+  if (!p.text.trim()) { wres('<span style="color:#d33">先输入诗文</span>'); return; }
+  wres('生成预览（dry_run，不动机械臂）…');
+  try {
+    const j = await wpost('/api/write_preview', p);
+    let html = '预览：共 ' + j.total_chars + ' 字，墨迹总长 ' + j.total_mm +
+               'mm，预计约 ' + j.est_seconds + ' 秒（含蘸墨，按 20s/字 估）<br>';
+    j.chars.forEach(c => {
+      html += esc(c.char) + ' → paper' + c.sheet + ' r' + c.row + 'c' + c.col +
+              '　' + c.strokes + ' 笔 ' + c.length_mm.toFixed(0) + 'mm<br>';
+    });
+    wres(html);
+  } catch (e) { wres('<span style="color:#d33">预览失败：' + esc(e.message) + '</span>'); }
+}
+
+async function wdip() {
+  if (!confirm('蘸墨会运动机械臂（抬到转场高度 → 走高空走廊 → 下探墨碟），确认？')) return;
+  try { await wpost('/api/write_dip'); setMsg('蘸墨中…'); pollWrite(); }
+  catch (e) { setMsg('蘸墨启动失败：' + e.message, true); }
+}
+
+async function wstart() {
+  const p = wparams();
+  const n = [...p.text].filter(c => c.trim()).length;
+  if (!n) { wres('<span style="color:#d33">先输入诗文</span>'); return; }
+  if (!confirm('流程：先蘸墨一次，再从 paper' + p.sheet + ' r' + p.row + 'c' + p.col +
+               ' 起写 ' + n + ' 个字（约 ' + (15 + 20 * n) + ' 秒）' +
+               (p.allow_complex ? '，已放行复杂字' : '') +
+               '。\n确认：手已握稳笔、笔尖朝下、纸已铺好？')) return;
+  try {
+    await wpost('/api/write_start', p);
+    setMsg('书写任务已启动');
+    pollWrite();
+  } catch (e) {
+    setMsg('书写启动失败：' + e.message, true);
+    wres('<span style="color:#d33">' + esc(e.message) + '</span>');
+  }
+}
+
+async function wstop() {
+  try { await wpost('/api/write_stop'); setMsg('已请求停止：当前笔画完成后停', true); }
+  catch (e) { setMsg('停止请求失败：' + e.message, true); }
+}
+
+async function pollWrite() {
+  try {
+    const r = await fetch('/api/write_status');
+    const j = await r.json();
+    if (!r.ok) return;
+    const active = (j.status === 'running' || j.status === 'stopping');
+    if (active && !writeActive) setButtons(true);          // 锁住所有运动按钮
+    if (!active && writeActive) {                          // 刚结束：解锁 + 总结
+      setButtons(false);
+      if (j.status === 'done') setMsg('书写完成');
+      else if (j.status === 'stopped') setMsg('写字已停止', true);
+      else if (j.status === 'error') setMsg('写字出错：' + (j.error || '未知'), true);
+    }
+    writeActive = active;
+    document.getElementById('wstop').disabled = !active;
+    if (j.log && j.log.length) {
+      wlogEl.style.display = 'block';
+      wlogEl.textContent = j.log.slice(-60).join('\n');
+      wlogEl.scrollTop = wlogEl.scrollHeight;
+    }
+    if (active && j.current) setMsg(j.current);
+  } catch (e) { /* 静默，下轮再试 */ }
+}
+
 refreshPose();
 setInterval(refreshPose, 2000);
+setInterval(pollWrite, 1000);
 loadWps();
 </script>
 </body>
@@ -396,6 +566,192 @@ def get_arm():
     return _arm
 
 
+# ============================================================================
+# 写字（决赛流程：公布诗题 → 面板输入诗文 → 检查字库 → 预览 → 蘸墨 → 整首写完）
+# ============================================================================
+WRITE_SEC_PER_CHAR = 20    # 总时长估算：约 20s/字（10-12 赛场实测）
+WRITE_DIP_S = 15           # 蘸墨一次约 15s
+
+_write_lock = threading.Lock()
+_write_stop = threading.Event()
+_write = {"status": "idle", "mode": None, "current": "", "error": None, "log": []}
+_stroke_lib = None
+_engine_mod = None
+
+
+def get_stroke_lib():
+    """懒加载笔画库：offline=True 只读本地缓存，现场无网也能用，绝不联网。"""
+    global _stroke_lib
+    if _stroke_lib is None:
+        from stroke_lib import StrokeLib
+        _stroke_lib = StrokeLib(offline=True, verbose=False)
+    return _stroke_lib
+
+
+def get_engine_mod():
+    """懒加载 write_engine（带 numpy 等重依赖，只在用写字功能时才 import）。"""
+    global _engine_mod
+    if _engine_mod is None:
+        import write_engine
+        _engine_mod = write_engine
+    return _engine_mod
+
+
+def _write_log(line):
+    with _write_lock:
+        _write["log"].append(line)
+        if len(_write["log"]) > 400:          # 封顶，防止长任务把状态撑爆
+            del _write["log"][:-400]
+
+
+def _write_progress(msg):
+    with _write_lock:
+        _write["current"] = msg
+    _write_log("== " + msg + " ==")
+
+
+def _write_finish(status, error=None):
+    tail = {"done": "== 全部完成 ==", "stopped": "== 已停止（当前笔画完成后停）==",
+            "error": f"== 出错中止：{error} =="}.get(status, status)
+    with _write_lock:
+        _write["status"] = status
+        _write["error"] = error
+        _write["current"] = ""
+    _write_log(tail)
+
+
+class _LogTee:
+    """把写字引擎 print 的每一行收进面板进度日志（引擎本身不改）。"""
+
+    def __init__(self):
+        self._buf = ""
+
+    def write(self, s):
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                _write_log(line)
+
+    def flush(self):
+        if self._buf.strip():
+            _write_log(self._buf)
+        self._buf = ""
+
+
+class _WriteAbort(Exception):
+    """操作员在面板点了「停止」。"""
+
+
+def _make_engine(allow_complex):
+    """复用本进程已有的 arm/hand 连接造写字引擎（CNDE 只允许单客户端，不能再起 Arm()）。"""
+    we = get_engine_mod()
+
+    class _JogWriteEngine(we.WriteEngine):
+        def _vertical(self, pose, why, vel=None):
+            # 停止检查点：只拦「落笔」。落笔前笔一定在纸面上方（5/20/50mm 高位），
+            # 此刻中止绝对安全 → 实现「当前笔画完成后停」，不用毫秒级急停
+            if _write_stop.is_set() and "落笔" in why:
+                raise _WriteAbort()
+            return super()._vertical(pose, why, we.DESCEND_VEL if vel is None else vel)
+
+    return _JogWriteEngine(get_arm(), get_hand(), allow_complex=allow_complex)
+
+
+def _write_worker(mode, text, sheet, start_row, start_col, allow_complex):
+    """写字后台线程：先蘸墨再逐字写。逐字循环的布局逻辑与 WriteEngine.write_text
+    一致（写满一行换行、写满一页翻纸），逐字调用是为了报进度和在字间响应停止。
+    任何异常只把状态置为 error 并记录原因，绝不搞死 server。"""
+    tee = _LogTee()
+    try:
+        with contextlib.redirect_stdout(tee):
+            try:
+                eng = _make_engine(allow_complex)
+            except Exception:                           # noqa: BLE001
+                # 引擎初始化要读 strokes_cache.json/waypoints.json：预抓进程正在写缓存时
+                # 可能读到半截 JSON，等 2s 重试一次再放弃
+                time.sleep(2)
+                eng = _make_engine(allow_complex)
+            _write_progress("蘸墨…")
+            eng.dip_ink()
+            if mode == "write":
+                chars = [c for c in text if c.strip()]
+                n = len(chars)
+                g = eng.grid(sheet)
+                row, col, cur = start_row, start_col, sheet
+                for i, ch in enumerate(chars, 1):
+                    if _write_stop.is_set():
+                        raise _WriteAbort()
+                    if col > g.cols:
+                        row += 1
+                        col = 1
+                        if row > g.rows:
+                            cur += 1
+                            row = 1
+                            eng._need(f"paper{cur}_tl")   # 没示教下一张纸就提前炸掉
+                            g = eng.grid(cur)
+                            _write_log(f"→ 本页写完，翻到 paper{cur}")
+                    _write_progress(f"第 {i}/{n} 字「{ch}」 paper{cur} r{row}c{col}")
+                    eng.write_char(ch, cur, row, col)
+                    col += 1
+        tee.flush()
+        _write_finish("stopped" if _write_stop.is_set() else "done")
+    except _WriteAbort:
+        tee.flush()
+        _write_finish("stopped")
+    except Exception as e:                          # noqa: BLE001
+        tee.flush()
+        _write_finish("error", str(e))
+    finally:
+        _move_lock.release()
+
+
+def _start_write_task(mode, text="", sheet=1, row=1, col=1, allow_complex=True):
+    """启动写字/蘸墨后台线程。返回错误字符串，None = 成功。"""
+    with _write_lock:
+        if _write["status"] in ("running", "stopping"):
+            return "写字任务正在进行中"
+    if not _move_lock.acquire(blocking=False):      # 与点动/航点/回home互斥
+        return "有点动或航点运动正在进行，等它结束再启动写字"
+    _write_stop.clear()
+    with _write_lock:
+        _write.update({"status": "running", "mode": mode, "current": "启动中…",
+                       "error": None, "log": []})
+    threading.Thread(target=_write_worker,
+                     args=(mode, text, sheet, row, col, allow_complex), daemon=True).start()
+    return None
+
+
+def _write_preview(text, sheet, start_row, start_col, allow_complex):
+    """dry_run 生成整首计划：用 write_engine._PlanOnlyArm 纯计算，绝不碰硬件。
+    布局逻辑与 WriteEngine.write_text 一致。"""
+    we = get_engine_mod()
+    eng = we.WriteEngine(we._PlanOnlyArm(we.DEFAULT_WP_FILE), None,
+                         allow_complex=allow_complex, verbose=False)
+    chars = [c for c in text if c.strip()]
+    if not chars:
+        raise ValueError("诗文为空（空白字符不算）")
+    g = eng.grid(sheet)
+    row, col, cur = start_row, start_col, sheet
+    out = []
+    for ch in chars:
+        if col > g.cols:
+            row += 1
+            col = 1
+            if row > g.rows:
+                cur += 1
+                row = 1
+                eng._need(f"paper{cur}_tl")
+                g = eng.grid(cur)
+        plan = eng.plan_char(ch, cur, row, col)
+        out.append({"char": ch, "sheet": cur, "row": row, "col": col,
+                    "strokes": len(plan["strokes"]), "length_mm": plan["total_mm"]})
+        col += 1
+    total_mm = round(sum(c["length_mm"] for c in out), 1)
+    return {"chars": out, "total_chars": len(out), "total_mm": total_mm,
+            "est_seconds": WRITE_DIP_S + WRITE_SEC_PER_CHAR * len(out)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ArmJog/0.1"
 
@@ -434,6 +790,9 @@ class Handler(BaseHTTPRequestHandler):
                     for n, w in wps.items()]})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/write_status":
+            with _write_lock:
+                self._send_json(dict(_write))
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -547,6 +906,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 hand = get_hand()
+                with _write_lock:           # 写字期间手必须保持握笔，任何手部动作都禁止
+                    writing = _write["status"] in ("running", "stopping")
+                if writing:
+                    raise RuntimeError("写字/蘸墨进行中，禁止手部动作（手里握着笔）")
                 if hand is not None:
                     if action == "open":
                         hand.open()
@@ -574,6 +937,89 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"请求参数错误: {e}"}, 400)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/write_check":
+            # 检查字库：逐字查本地缓存（offline，不联网），缺字列出来
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                text = str(req["text"])
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            try:
+                seen, chars = set(), []
+                for c in text:
+                    if c.strip() and c not in seen:
+                        seen.add(c)
+                        chars.append(c)
+                lib = get_stroke_lib()
+                missing = [c for c in chars if not lib.has(c)]
+                self._send_json({"chars": [{"ch": c, "ok": c not in missing} for c in chars],
+                                 "missing": missing, "unique": len(chars)})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/write_preview":
+            # 预览：dry_run 纯计算（_PlanOnlyArm），绝不碰硬件
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                result = _write_preview(str(req["text"]),
+                                        int(req.get("sheet", 1)),
+                                        int(req.get("row", 1)),
+                                        int(req.get("col", 1)),
+                                        bool(req.get("allow_complex", True)))
+                self._send_json(result)
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+            except RuntimeError as e:
+                self._send_json({"error": str(e)}, 400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/write_dip":
+            err = _start_write_task("dip")
+            if err:
+                self._send_json({"error": err}, 409)
+            else:
+                self._send_json({"ok": True})
+        elif self.path == "/api/write_start":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                text = str(req["text"])
+                sheet = int(req.get("sheet", 1))
+                row = int(req.get("row", 1))
+                col = int(req.get("col", 1))
+                allow_complex = bool(req.get("allow_complex", True))
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            chars = [c for c in text if c.strip()]
+            if not chars:
+                self._send_json({"error": "诗文为空（空白字符不算）"}, 400)
+                return
+            try:
+                lib = get_stroke_lib()      # 服务端再查一次缺字，不依赖前端先点「检查字库」
+                missing = sorted({c for c in chars if not lib.has(c)})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+                return
+            if missing:
+                self._send_json({"error": "缺字无法书写，需联网预抓或换字："
+                                          + " ".join(missing),
+                                 "missing": missing}, 400)
+                return
+            err = _start_write_task("write", text, sheet, row, col, allow_complex)
+            if err:
+                self._send_json({"error": err}, 409)
+            else:
+                self._send_json({"ok": True, "chars": len(chars)})
+        elif self.path == "/api/write_stop":
+            _write_stop.set()
+            with _write_lock:
+                if _write["status"] == "running":
+                    _write["status"] = "stopping"
+            _write_log("== 收到停止请求：当前笔画完成后停 ==")
+            self._send_json({"ok": True})
         else:
             self._send_json({"error": "not found"}, 404)
 
