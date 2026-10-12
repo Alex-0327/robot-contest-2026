@@ -556,15 +556,16 @@ class StrokeLib:
             if self.font is None and not getattr(self, "_font_failed", False):
                 try:
                     self.font = _Font(self.font_path or find_font())
-                except FileNotFoundError as e:
+                except Exception as e:
                     self._font_failed = True
-                    print(f"[笔画库] 也没找到可用字体（{e}），只能靠缓存里的字", file=sys.stderr)
+                    print(f"[笔画库] 字体骨架路径不可用（{e}），只能靠缓存/数据集里的字",
+                          file=sys.stderr)
             try:
                 st = skeleton_strokes(self.font, ch) if self.font else []
                 if st and self.verbose:
                     print(f"[笔画库] {ch} 用字体骨架兜底（{len(st)} 笔，字形不如数据集准）",
                           file=sys.stderr)
-            except KeyError:
+            except Exception:
                 st = []
         if not st:
             self._miss.add(ch)

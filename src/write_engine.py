@@ -461,6 +461,31 @@ class WriteEngine:
             raise RuntimeError(f"{why} 失败（垂直升降 move_ik）→ {e}") from e
 
     # ---------------------------------------------------------------- 执行
+    def dip_ink(self, dwell_s=1.5):
+        """蘸墨：当前位 → 抬转场高 → 走廊(2→1) → 墨碟上方(ink_pre) → 垂直下探 ink_dip
+        → 停 dwell → 抬回 ink_pre。之后第一个字的远距进字逻辑会自动走走廊回纸。"""
+        self.check_ready()
+        cur = self.arm.get_pose()
+        if cur[2] < TRANSIT_Z_MM - 1.0:
+            lifted = list(cur); lifted[2] = TRANSIT_Z_MM
+            self._vertical(lifted, "蘸墨前抬到转场高度", vel=TRANSIT_VEL)
+        for cn in ("ink_corridor_2", "ink_corridor_1"):   # 纸→墨方向，与进字相反
+            if cn in self.wp:
+                self.arm.move_ik(self._need(cn), vel=TRANSIT_VEL)
+                print(f"  [转场] 过走廊点 {cn}")
+        if "ink_pre" in self.wp:
+            self.arm.move_ik(self._need("ink_pre"), vel=TRANSIT_VEL)
+            print("  [转场] 到墨碟上方 ink_pre")
+        dip = self._need("ink_dip")
+        self._vertical(dip, "蘸墨下探")
+        time.sleep(dwell_s)
+        if "ink_pre" in self.wp:
+            self._vertical(self._need("ink_pre"), "蘸墨抬笔")
+        else:
+            lifted = list(dip); lifted[2] = dip[2] + SAFE_HOP_MM
+            self._vertical(lifted, "蘸墨抬笔")
+        print(f"[蘸墨] 完成（停 {dwell_s}s）")
+
     def write_char(self, ch, sheet=1, row=1, col=1, dry_run=False):
         """写一个字。dry_run=True 只打印计划不动硬件。"""
         fr = self.frame(sheet)
@@ -585,6 +610,7 @@ def main():
     ap.add_argument("--col", type=int, default=1)
     ap.add_argument("--waypoints", default="")
     ap.add_argument("--allow-complex", action="store_true", help="放行非单体字")
+    ap.add_argument("--dip", action="store_true", help="写字前先蘸墨一次（真机模式有效）")
     ap.add_argument("--list-cells", action="store_true", help="打印所有格心 base 坐标")
     ap.add_argument("--execute", action="store_true", help="★真机执行（默认只读）")
     args = ap.parse_args()
@@ -638,6 +664,8 @@ def main():
                     print(f"  r{r}c{c}  局部({x:7.2f},{y:7.2f})  base={[round(v, 1) for v in fr.point(x, y)]}")
 
     try:
+        if args.dip and args.execute:
+            eng.dip_ink()
         eng.write_text(args.char, args.sheet, args.row, args.col, dry_run=not args.execute)
     except RuntimeError as e:
         print(f"★ 中止：{e}")
