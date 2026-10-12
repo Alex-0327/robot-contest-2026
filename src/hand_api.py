@@ -18,8 +18,9 @@ PEN_PRE_GRASP_FINGERS = dict(ff_mcp=40, ff_dip=30, mf_mcp=40, mf_dip=30)
 PEN_PRE_GRASP_THUMB = dict(th_rot=70)  # 预成形时拇指只旋转、保持伸直，给下降留通道
 
 # 最终握紧姿态（绝对角度）
-PEN_GRASP_FINGERS = dict(ff_mcp=70, ff_dip=30, mf_mcp=75, mf_dip=30)
-PEN_GRASP_THUMB = dict(th_rot=70, th_mcp=55, th_dip=0)
+# 10-12 写字实测笔杆微滑 → ff_mcp 70→75 / mf_mcp 75→80 / th_mcp 55→60（每次只加 5°，防电机顶死）
+PEN_GRASP_FINGERS = dict(ff_mcp=75, ff_dip=30, mf_mcp=80, mf_dip=30)
+PEN_GRASP_THUMB = dict(th_rot=70, th_mcp=60, th_dip=0)
 
 
 class Hand:
