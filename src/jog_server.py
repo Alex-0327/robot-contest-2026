@@ -199,7 +199,7 @@ async function gotoWp() {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    showPose(j.pose); setMsg('已到航点 [' + name + ']，可以开始微调');
+    showPose(j.pose); setMsg('已到航点 [' + name + '] 上方 15mm，按 Z− 压到纸面后微调');
   } catch (e) { setMsg('去航点失败：' + e.message, true); }
   finally { busy = false; setButtons(false); }
 }
@@ -453,7 +453,9 @@ class Handler(BaseHTTPRequestHandler):
                 high = cur[:]; high[2] = safe_z
                 arm.move_ik(high, vel=10)
                 arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
-                arm.move_ik(wp, vel=5)
+                # 只降到航点上方 15mm 悬停：姿态被统一修正过时，原 z 可能已低于纸面，
+                # 最后一段由人手动 Z− 压下去，防止自动下降把笔戳进纸里
+                arm.move_ik([wp[0], wp[1], wp[2] + 15.0, wp[3], wp[4], wp[5]], vel=5)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
