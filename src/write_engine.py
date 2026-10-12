@@ -422,12 +422,16 @@ class WriteEngine:
                     lifted = list(cur); lifted[2] = TRANSIT_Z_MM
                     self._vertical(lifted, "进入前抬到转场高度", vel=TRANSIT_VEL)
                 # 绕笔筒走廊：笔挂在 TCP 下约 18cm，墨碟→纸直飞会在笔筒顶部剐蹭
-                # （10-12 实测撞笔筒）。存在走廊航点时先走高空走廊再进纸面。
-                for cn in ("ink_corridor_1", "ink_corridor_2"):
-                    if cn in self.wp:
-                        self.arm.move_ik(self._need(cn), vel=TRANSIT_VEL)
-                        print(f"  [转场] 过走廊点 {cn}")
-                self._move(fr.air(start, SAFE_HOP_MM), TRANSIT_VEL, "平移到落点上方 5cm")
+                # （10-12 实测撞笔筒）。只有从远处（墨碟侧）进字才走走廊；
+                # 格间短距转移不绕（10-12 连写「日月」：每字绕走廊浪费 ~10s）
+                entry = fr.air(start, SAFE_HOP_MM)
+                far = math.dist(cur[:2], entry[:2]) > 200.0
+                if far:
+                    for cn in ("ink_corridor_1", "ink_corridor_2"):
+                        if cn in self.wp:
+                            self.arm.move_ik(self._need(cn), vel=TRANSIT_VEL)
+                            print(f"  [转场] 过走廊点 {cn}")
+                self._move(entry, TRANSIT_VEL, "平移到落点上方 5cm")
             else:
                 d = math.dist(start[:2], prev_end[:2])
                 if d <= SHORT_MOVE_MM:                  # 相邻笔画：保持 5mm 高度平移
