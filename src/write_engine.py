@@ -43,6 +43,7 @@ import json
 import math
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -376,7 +377,10 @@ class WriteEngine:
             self.arm.move_to(pose, vel=vel)
             return
         except RuntimeError as e:
-            print(f"  [运动] MoveL 失败（{e}）→ 改走 move_ik")
+            print(f"  [运动] MoveL 失败（{e}）→ 复位故障后改走 move_ik")
+            self.arm.reset_errors()   # MoveL 报错会锁存故障，不复位后续全报 err=14
+            time.sleep(1)
+            self.arm.enable(True)
         try:
             self.arm.move_ik(pose, vel=vel)
         except Exception as e:                                 # noqa: BLE001
