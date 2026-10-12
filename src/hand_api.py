@@ -32,7 +32,10 @@ class Hand:
         self.state = dict(OPEN)  # 固件读不回实际角度，记录最后一次指令值
 
     def open(self, settle=1.0):
-        """五指完全张开。"""
+        """五指完全张开。同一广播发两遍：12 关节单帧广播偶发个别关节丢帧
+        （10-12 现场：仅中指张开、拇指/食指未动），幂等补发无副作用。"""
+        self._hand.move_joints(**OPEN)
+        time.sleep(0.5)
         self._hand.move_joints(**OPEN)
         self.state.update(OPEN)
         time.sleep(settle)
