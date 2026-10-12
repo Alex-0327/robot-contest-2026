@@ -62,8 +62,7 @@ WRITE_VEL = 3.0           # 走笔速度（≤5）
 DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
 TRANSIT_VEL = 10.0        # 转场速度（≤10）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
-PRESS_MM = 0.0            # 落笔下压量（笔尖压入纸面的深度）：墨淡→0.3~0.5，晕染→0.1。
-                          # 默认 0 = 笔尖刚触到示教的纸面高度，先按 0 试，再按效果调
+PRESS_MM = -4.0           # 落笔下压量（正=往纸里压，负=抬高）。10-12 实测 PRESS=0 墨色太深 → 抬 4mm
 SHEET_MM = (420.0, 297.0)  # A3 横向（4 张拼成 A1 阵列）
 
 # 官方《方格.pdf》实测值（mm，A3 放大打印）：没有标定航点时用它兜底
@@ -330,9 +329,13 @@ class WriteEngine:
         """纯计算：把「写这个字」变成一串 base 位姿。不动机械臂。"""
         fr, g = self.frame(sheet), self.grid(sheet)
         base_cell = self.cell_center_pose(sheet, row, col)
+        # 字形自动居中：笔画库的字在 0~1 框里不一定居中（如「日」偏左下 1.3/2.4mm），
+        # 按本字 bbox 中心对齐格心，消掉系统性偏移（10-12 实测「日」偏左下）
+        all_uv = np.array([p for poly in self.strokes_of(ch) for p in poly])
+        cu, cv = (all_uv.min(axis=0) + all_uv.max(axis=0)) / 2.0
         plan, total = [], 0.0
         for poly in self.strokes_of(ch):
-            pts = [fr.offset_from(base_cell, (u - 0.5) * g.cell_w, (v - 0.5) * g.cell_h)
+            pts = [fr.offset_from(base_cell, (u - cu) * g.cell_w, (v - cv) * g.cell_h)
                    for u, v in poly]
             a = np.asarray([p[:3] for p in pts])
             length = float(np.hypot(*np.diff(a, axis=0).T).sum()) if len(a) > 1 else 0.0
