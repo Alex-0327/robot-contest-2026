@@ -57,7 +57,12 @@ DEFAULT_WP_FILE = os.path.join(HERE, "waypoints.json")
 RETRACT_MM = 5.0          # 笔画间抬笔高度（任务书要求 5mm 换笔）
 SAFE_HOP_MM = 50.0        # 进入/离开一个字时的高度（任务书要求先到落点上方 5cm）
 TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（墨碟上方 z≈291，再抬 50 不可达 err=38）
-SHORT_MOVE_MM = 12.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
+SHORT_MOVE_MM = 30.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
+                          # （12→30：5mm 平移模式 10-12 已验收；字内多数笔距 <30mm，
+                          #  少一次 50mm 慢速落笔每字省 ~3-6s）
+INTRA_HOP_MM = 20.0       # 字内远笔画（>SHORT_MOVE_MM）的转场高度：仍走「抬-移-落」三段式，
+                          # 但 50→20mm。5cm 是任务书对【进字】的要求，字内无此约束；
+                          # 纸面平坦、上方无障碍，落笔慢速段缩短 30mm 每处省 ~1-2s
 WRITE_VEL = 4.0           # 走笔速度（≤5；3→4：10-12 整纸压测 347s 后提速）
 TRACE_BLEND_MM = 1.2      # 走笔 MoveL 转角平滑半径（非阻塞连发，10-11 write_api 已验证模式）；
                           # 折线顶点不停顿：省每段 ~0.2-0.4s 阻塞开销，拐角也不积墨。设 0 退回逐段阻塞
@@ -476,9 +481,9 @@ class WriteEngine:
                 d = math.dist(start[:2], prev_end[:2])
                 if d <= SHORT_MOVE_MM:                  # 相邻笔画：保持 5mm 高度平移
                     self._move(fr.air(start, RETRACT_MM), TRANSIT_VEL, "笔画间 5mm 平移")
-                else:                                   # 远距离：抬到 5cm 再平移
-                    self._vertical(fr.air(prev_end, SAFE_HOP_MM), "跨笔画抬到 5cm", vel=TRANSIT_VEL)
-                    self._move(fr.air(start, SAFE_HOP_MM), TRANSIT_VEL, "平移到下一笔上方")
+                else:                                   # 字内远笔画：抬到 20mm 再平移
+                    self._vertical(fr.air(prev_end, INTRA_HOP_MM), "跨笔画抬笔", vel=TRANSIT_VEL)
+                    self._move(fr.air(start, INTRA_HOP_MM), TRANSIT_VEL, "平移到下一笔上方")
             self._vertical(start, f"第{i}笔落笔")        # ③下降
             self._trace(pts, f"第{i}笔")
             self._vertical(fr.air(end, RETRACT_MM), f"第{i}笔抬笔")
