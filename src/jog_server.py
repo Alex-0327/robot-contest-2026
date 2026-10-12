@@ -496,6 +496,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     raise ValueError("航点名不能为空")
                 travel = float(req.get("travel_z", 300.0))
+                exact = bool(req.get("exact", False))
             except (KeyError, ValueError, TypeError) as e:
                 self._send_json({"error": f"请求参数错误: {e}"}, 400)
                 return
@@ -510,9 +511,10 @@ class Handler(BaseHTTPRequestHandler):
                 high = cur[:]; high[2] = safe_z
                 arm.move_ik(high, vel=10)
                 arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
-                # 只降到航点上方 15mm 悬停：姿态被统一修正过时，原 z 可能已低于纸面，
-                # 最后一段由人手动 Z− 压下去，防止自动下降把笔戳进纸里
-                arm.move_ik([wp[0], wp[1], wp[2] + 15.0, wp[3], wp[4], wp[5]], vel=5)
+                # 默认只降到航点上方 15mm 悬停（防姿态修正后原 z 低于纸面戳笔），
+                # 勾选「降到底」才回保存的精确位置（标定复验用）
+                final_z = wp[2] if exact else wp[2] + 15.0
+                arm.move_ik([wp[0], wp[1], final_z, wp[3], wp[4], wp[5]], vel=5)
                 self._send_json({"ok": True, "pose": arm.get_pose()})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
