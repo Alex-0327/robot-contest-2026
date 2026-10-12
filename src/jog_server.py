@@ -57,6 +57,7 @@ INDEX_HTML = """<!DOCTYPE html>
   </label>
   <button onclick="loadWps()">刷新航点列表</button>
   <button onclick="gotoWp()">去该航点</button>
+  <label style="font-size:14px"><input type="checkbox" id="goexact">降到底(默认停上方15mm)</label>
   <button onclick="saveOver()">覆盖保存到该航点</button>
 </div>
 <div class="row">
@@ -197,15 +198,18 @@ async function gotoWp() {
   const name = document.getElementById('wpsel').value;
   if (!name) { setMsg('先选一个航点', true); return; }
   if (busy) return;
+  const exact = document.getElementById('goexact').checked;
   busy = true; setButtons(true); setMsg('正在去航点 [' + name + ']（抬高→平移→降下）…');
   try {
     const r = await fetch('/api/goto_waypoint', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name})
+      body: JSON.stringify({name, exact})
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    showPose(j.pose); setMsg('已到航点 [' + name + '] 上方 15mm，按 Z− 压到纸面后微调');
+    showPose(j.pose);
+    setMsg(exact ? '已到航点 [' + name + '] 原位置（降到底）'
+                 : '已到航点 [' + name + '] 上方 15mm，按 Z− 压到纸面后微调');
   } catch (e) { setMsg('去航点失败：' + e.message, true); }
   finally { busy = false; setButtons(false); }
 }
