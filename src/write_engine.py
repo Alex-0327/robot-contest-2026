@@ -68,6 +68,7 @@ TRACE_BLEND_MM = 1.2      # 走笔 MoveL 转角平滑半径（非阻塞连发，
                           # 折线顶点不停顿：省每段 ~0.2-0.4s 阻塞开销，拐角也不积墨。设 0 退回逐段阻塞
 TRACE_CHUNK = 8           # 每连发多少段 MoveL 等一次（与 write_api.chunk 一致，防爆队列）
 DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
+DESCEND_SLOW_MM = 10.0    # 落笔最后 10mm 慢速段；落差大于此值时空中段先按 TRANSIT_VEL 快落
 TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
 PRESS_MM = -4.0           # 落笔下压量（正=往纸里压，负=抬高）。10-12 实测 PRESS=0 墨色太深 → 抬 4mm
@@ -459,32 +460,47 @@ class WriteEngine:
             print(f"[写] 第 {i}/{len(plan['strokes'])} 笔：{len(pts)} 点 / {s['length_mm']:.1f}mm "
                   f"起 ({start[0]:.1f},{start[1]:.1f},{start[2]:.1f})")
             if prev_end is None:
-                # 进字：①原地抬到转场高度（保持当前姿态：墨碟位置用写字姿态超限；
-                # 已经在高位就不抬——继续硬抬会撞顶部位姿不可达 err=38，10-12 实测）
-                # ②平移到落点上方 ③下降（三段式，禁止直飞）
+                # 进字：①原地抬高 ②平移到落点上方 ③下降（三段式，禁止直飞）
                 cur = self.arm.get_pose()
-                if cur[2] < TRANSIT_Z_MM - 1.0:
-                    lifted = list(cur); lifted[2] = TRANSIT_Z_MM
-                    self._vertical(lifted, "进入前抬到转场高度", vel=TRANSIT_VEL)
                 # 绕笔筒走廊：笔挂在 TCP 下约 18cm，墨碟→纸直飞会在笔筒顶部剐蹭
                 # （10-12 实测撞笔筒）。只有从远处（墨碟侧）进字才走走廊；
                 # 格间短距转移不绕（10-12 连写「日月」：每字绕走廊浪费 ~10s）
                 entry = fr.air(start, SAFE_HOP_MM)
                 far = math.dist(cur[:2], entry[:2]) > 200.0
                 if far:
+                    # 远距进字（墨碟侧）：先原地抬到转场高度（保持当前姿态：
+                    # 墨碟位置用写字姿态超限；已经在高位就不抬——继续硬抬会撞
+                    # 顶部位姿不可达 err=38，10-12 实测），再走高空走廊
+                    if cur[2] < TRANSIT_Z_MM - 1.0:
+                        lifted = list(cur); lifted[2] = TRANSIT_Z_MM
+                        self._vertical(lifted, "进入前抬到转场高度", vel=TRANSIT_VEL)
                     for cn in ("ink_corridor_1", "ink_corridor_2"):
                         if cn in self.wp:
                             self.arm.move_ik(self._need(cn), vel=TRANSIT_VEL)
                             print(f"  [转场] 过走廊点 {cn}")
+                else:
+                    # 格间近距进字：上一字收笔在 5mm 高位，抬到落点上方 5cm 的高度
+                    # 即可（纸面上方无障碍），不再抬到 280 转场高度——每个字省
+                    # ~90mm 来回升降，也远离顶部位姿 err=38 的边
+                    need = entry[2] - cur[2]
+                    if need > 1.0:
+                        self._vertical(fr.air(cur, need), "进字抬到落点上方 5cm", vel=TRANSIT_VEL)
                 self._move(entry, TRANSIT_VEL, "平移到落点上方 5cm")
+                hop = SAFE_HOP_MM
             else:
                 d = math.dist(start[:2], prev_end[:2])
                 if d <= SHORT_MOVE_MM:                  # 相邻笔画：保持 5mm 高度平移
                     self._move(fr.air(start, RETRACT_MM), TRANSIT_VEL, "笔画间 5mm 平移")
+                    hop = RETRACT_MM
                 else:                                   # 字内远笔画：抬到 20mm 再平移
                     self._vertical(fr.air(prev_end, INTRA_HOP_MM), "跨笔画抬笔", vel=TRANSIT_VEL)
                     self._move(fr.air(start, INTRA_HOP_MM), TRANSIT_VEL, "平移到下一笔上方")
-            self._vertical(start, f"第{i}笔落笔")        # ③下降
+                    hop = INTRA_HOP_MM
+            # ③下降：落差大时先快速落到 10mm 再慢速触纸——空中段无书写质量约束，
+            # 只有最后 10mm 决定落笔轻重（每次进字省 ~1s）
+            if hop > DESCEND_SLOW_MM + 5.0:
+                self._vertical(fr.air(start, DESCEND_SLOW_MM), f"第{i}笔落笔快段", vel=TRANSIT_VEL)
+            self._vertical(start, f"第{i}笔落笔")
             self._trace(pts, f"第{i}笔")
             self._vertical(fr.air(end, RETRACT_MM), f"第{i}笔抬笔")
             prev_end = list(end)
