@@ -74,13 +74,16 @@ DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
 DESCEND_SLOW_MM = 10.0    # 落笔最后 10mm 慢速段；落差大于此值时空中段先按 TRANSIT_VEL 快落
 TRANSIT_VEL = 14.0        # 转场速度（10→14：走廊高空段很安全，提速压总时长）
 CORNER_TOL_MM = 5.0       # 第 4 角校验误差上限
-CENTER00_CORR_MM = (13.0, -15.0)  # 锚点修正（右, 上）：十字中心是人眼点的，常偏几 mm。
+CENTER00_CORR_MM = (10.0, -12.0)  # 锚点修正（右, 上）：十字中心是人眼点的，常偏几 mm。
                           # 10-12 赛场尺子实测：第一行字低于中线 15mm（无修正）→ 垂直 -15；
-                          # 水平 +8 后左间距 5mm（居中应 ~11）→ +13
+                          # +13/+15 实测过头：「里」末横出右格 5mm、「家」顶点出上格 6mm → 回退到 +10/-12
 ROW_PITCH_CORR_MM = -2.0  # 行距修正：10-12 实测第二行字低 12mm（= 15 - 5锚修 + 行距误差）
                           # → 图纸行距 108.28 比真实大 2mm，用 106.28
-PRESS_MM = 8.0            # 落笔下压量（正=往纸里压，负=抬高）。原为 -4（10-12 上午定稿）；
-                          # 10-12 下午笔在筒中被顶高 12mm（空写事故）→ 整体多压 12，-4+12=+8
+PRESS_MM = 10.0           # 落笔下压量（正=往纸里压，负=抬高）。原为 -4（10-12 上午定稿）；
+                          # 10-12 下午笔在筒中被顶高 12mm（空写事故）→ 整体多压 12，-4+12=+8；
+                          # +8 仍多数笔画没落墨（贴面未触纸）→ 再压 2mm = +10
+GLYPH_SCALE = 0.95        # 字形缩放：满格大字（里宽 56mm、家高 54mm）遇锚点几 mm 误差就出格，
+                          # 缩 5% 换四边各 ~2mm 余量，肉眼几乎看不出
 SHEET_MM = (420.0, 297.0)  # A3 横向（4 张拼成 A1 阵列）
 
 # 官方《方格.pdf》实测值（mm，A3 放大打印）：没有标定航点时用它兜底
@@ -356,7 +359,8 @@ class WriteEngine:
         cu, cv = (all_uv.min(axis=0) + all_uv.max(axis=0)) / 2.0
         plan, total = [], 0.0
         for poly in self.strokes_of(ch):
-            pts = [fr.offset_from(base_cell, (u - cu) * g.cell_w, (v - cv) * g.cell_h)
+            pts = [fr.offset_from(base_cell, (u - cu) * g.cell_w * GLYPH_SCALE,
+                                  (v - cv) * g.cell_h * GLYPH_SCALE)
                    for u, v in poly]
             a = np.asarray([p[:3] for p in pts])
             length = float(np.hypot(*np.diff(a, axis=0).T).sum()) if len(a) > 1 else 0.0
