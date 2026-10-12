@@ -15,6 +15,7 @@ teach_waypoints.py 的后缀使用。
 """
 import os
 import sys
+import time
 
 from arm_api import Arm
 from hand_api import Hand
@@ -27,6 +28,8 @@ waypoint_file = (os.path.join(os.path.dirname(__file__), f"waypoints_{suffix}.js
 
 arm = Arm(waypoint_file=waypoint_file)
 hand = Hand()
+arm.reset_errors()   # 清上次运行锁存的故障（不_reset_后续 MoveJ 全报 err=14）
+time.sleep(1)
 arm.enable(True)
 hand.open()
 
