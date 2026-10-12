@@ -105,8 +105,12 @@ INDEX_HTML = """<!DOCTYPE html>
 <div class="row">
   <button onclick="resetCtl()">复位+自动模式</button>
   <button onclick="gohome()">回 home</button>
-  <button onclick="pickPen()">一键拿笔+抬起</button>
   <button id="estop" onclick="estop()">急停</button>
+</div>
+<div class="row">灵巧手：
+  <button onclick="handCmd('open')">伸直</button>
+  <button onclick="handCmd('pre')">预抓握</button>
+  <button onclick="handCmd('grasp')">抓握</button>
 </div>
 <div id="msg"></div>
 <script>
@@ -249,18 +253,18 @@ async function estop() {
   catch (e) { setMsg('急停请求失败：' + e.message, true); }
 }
 
-async function pickPen() {
-  // 一键拿笔：复用 demo_pick_pen 已验证序列（张手→笔上方→预成形→下降→握紧→抬起悬空）
-  if (busy) return;
-  if (!confirm('确认执行一键拿笔？笔须在笔架初始位，机械臂将自动下降抓握')) return;
-  busy = true; setButtons(true); setMsg('拿笔中（约20秒）：张手→到位→抓握→抬起…');
+async function handCmd(action) {
+  const names = {open: '伸直', pre: '预抓握', grasp: '抓握'};
+  setMsg('灵巧手：' + names[action] + '…');
   try {
-    const r = await fetch('/api/pick_pen', {method: 'POST'});
+    const r = await fetch('/api/hand', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action})
+    });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    showPose(j.pose); setMsg('已拿笔并抬起悬空，请手动确认捏持牢固');
-  } catch (e) { setMsg('拿笔失败：' + e.message, true); }
-  finally { busy = false; setButtons(false); }
+    setMsg('灵巧手已' + names[action]);
+  } catch (e) { setMsg('手部动作失败：' + e.message, true); }
 }
 
 async function refreshPose() {
@@ -526,33 +530,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
             finally:
                 _move_lock.release()
-        elif self.path == "/api/pick_pen":
-            # 一键拿笔+抬起悬空：复用 demo_pick_pen 已验证序列
-            # （张手→笔上方60mm→预成形→慢降→握紧→抬回→再升到150mm悬空）
-            if not _move_lock.acquire(blocking=False):
-                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+        elif self.path == "/api/hand":
+            # 灵巧手三态：伸直 / 预抓握 / 抓握（握笔参数与 write_engine 同源）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                action = str(req["action"]).strip()
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
                 return
             try:
-                arm = get_arm()
                 hand = get_hand()
-                grasp_pose = arm.get_waypoint("pen_grasp")
-                above = list(grasp_pose); above[2] += 60.0
-                hover = list(grasp_pose); hover[2] += 150.0
-                if hand:
-                    hand.open()
-                arm.move_ik(above, vel=10)
-                if hand:
-                    hand.pre_grasp_pen()
-                arm.move_to(grasp_pose, vel=5)
-                if hand:
-                    hand.grasp_pen()
-                arm.move_to(above, vel=5)
-                arm.move_ik(hover, vel=10)
-                self._send_json({"ok": True, "pose": arm.get_pose()})
+                if hand is not None:
+                    if action == "open":
+                        hand.open()
+                    elif action == "pre":
+                        hand.pre_grasp_pen()
+                    elif action == "grasp":
+                        hand.grasp_pen()
+                    else:
+                        raise ValueError(f"未知手部动作 {action!r}（可选 open/pre/grasp）")
+                elif action not in ("open", "pre", "grasp"):
+                    raise ValueError(f"未知手部动作 {action!r}（可选 open/pre/grasp）")
+                self._send_json({"ok": True})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
-            finally:
-                _move_lock.release()
         elif self.path == "/api/save":
             try:
                 length = int(self.headers.get("Content-Length", 0))
