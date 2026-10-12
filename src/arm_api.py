@@ -26,6 +26,13 @@ except ImportError:  # 现场机：SDK 不在仓库内，用 PYTHONPATH=fairino-
 DEFAULT_IP = "192.168.58.2"
 WAYPOINT_FILE = os.path.join(os.path.dirname(__file__), "waypoints.json")
 
+# FR5 关节软限位（°），2026-10-12 从控制器 GetJointSoftLimitDeg 实读。
+# 注意 J2/J4 不对称（-265~+85）。GetInverseKin 不做限位检查，会返回超界解，
+# move_ik 选解前必须自己过滤，否则 MoveJ 报 err=14（10-12 取笔失败的教训）。
+JOINT_MIN = [-175.0, -265.0, -160.0, -265.0, -175.0, -175.0]
+JOINT_MAX = [175.0, 85.0, 160.0, 85.0, 175.0, 175.0]
+LIMIT_MARGIN = 3.0  # 离软限位留 3° 余量
+
 
 class Arm:
     def __init__(self, ip=DEFAULT_IP, tool=None, user=None, waypoint_file=None):
@@ -84,13 +91,16 @@ class Arm:
         for cfg in (-1, 0, 1, 2, 3, 4, 5, 6, 7):
             err, j = self.robot.GetInverseKin(0, list(pose), cfg)
             if err == 0 and j is not None:
+                if any(v < lo + LIMIT_MARGIN or v > hi - LIMIT_MARGIN
+                       for v, lo, hi in zip(j, JOINT_MIN, JOINT_MAX)):
+                    continue  # GetInverseKin 不查限位，超界解直接丢弃
                 dist = sum((a - b) ** 2 for a, b in zip(cur, j))
                 if j[2] <= 0:
                     dist += 1e6  # 肘朝下构型劣后，无肘上解时才用
                 if best is None or dist < best[0]:
                     best = (dist, list(j))
         if best is None:
-            raise RuntimeError("逆解失败（8 种构型均不可达）")
+            raise RuntimeError("逆解失败（8 种构型均不可达或超限位）")
         self.move_joints(best[1], vel=vel, blocking=blocking)
 
     def wait_done(self, timeout=30.0):
