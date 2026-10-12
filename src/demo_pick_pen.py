@@ -35,7 +35,7 @@ above = list(grasp_pose)
 above[2] += ABOVE_MM
 
 print("走到笔上方")
-arm.move_to(above, vel=20)
+arm.move_ik(above, vel=10)   # 大范围转移走关节空间：home→笔架的 MoveL 会撞奇异/超限(err=185)
 hand.pre_grasp_pen()
 
 print("慢速下降到夹取位")
