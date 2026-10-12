@@ -56,6 +56,7 @@ DEFAULT_WP_FILE = os.path.join(HERE, "waypoints.json")
 # ============================================================================
 RETRACT_MM = 5.0          # 笔画间抬笔高度（任务书要求 5mm 换笔）
 SAFE_HOP_MM = 50.0        # 进入/离开一个字时的高度（任务书要求先到落点上方 5cm）
+TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（墨碟上方 z≈291，再抬 50 不可达 err=38）
 SHORT_MOVE_MM = 12.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
 WRITE_VEL = 3.0           # 走笔速度（≤5）
 DESCEND_VEL = 5.0         # 落笔/抬笔垂直速度（≤5，走 move_ik）
@@ -410,11 +411,13 @@ class WriteEngine:
             print(f"[写] 第 {i}/{len(plan['strokes'])} 笔：{len(pts)} 点 / {s['length_mm']:.1f}mm "
                   f"起 ({start[0]:.1f},{start[1]:.1f},{start[2]:.1f})")
             if prev_end is None:
-                # 进字：①原地抬 5cm（保持当前姿态——从墨碟出发时写字姿态在墨碟位置超限，
-                # 10-12 实测 8 构型全炸）②平移到落点上方 ③下降（三段式，禁止直飞）
+                # 进字：①原地抬到转场高度（保持当前姿态：墨碟位置用写字姿态超限；
+                # 已经在高位就不抬——继续硬抬会撞顶部位姿不可达 err=38，10-12 实测）
+                # ②平移到落点上方 ③下降（三段式，禁止直飞）
                 cur = self.arm.get_pose()
-                lifted = list(cur); lifted[2] += SAFE_HOP_MM
-                self._vertical(lifted, "进入前抬到 5cm", vel=TRANSIT_VEL)
+                if cur[2] < TRANSIT_Z_MM - 1.0:
+                    lifted = list(cur); lifted[2] = TRANSIT_Z_MM
+                    self._vertical(lifted, "进入前抬到转场高度", vel=TRANSIT_VEL)
                 self._move(fr.air(start, SAFE_HOP_MM), TRANSIT_VEL, "平移到落点上方 5cm")
             else:
                 d = math.dist(start[:2], prev_end[:2])
