@@ -173,7 +173,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <hr>
 <h2>第 6 步 · 精细微调</h2>
-<p class="tip">这一步是干嘛的：一般不常用，给会的人用。键盘：←→=X，↑↓=Y，PgUp/PgDn=Z。</p>
+<p class="tip">这一步是干嘛的：第 3 步对不准时，用这里的小步按钮微调机械臂。键盘：←→=X，↑↓=Y，PgUp/PgDn=Z。</p>
 <div class="row">
   <label>步长
     <select id="step">
@@ -309,7 +309,7 @@ const flowDesc = {
 
 async function flowStart(flow) {
   if (writeActive) { setMsg('有任务正在进行中', true); return; }
-  if (!confirm(flowNames[flow] + ' 会运动机械臂和灵巧手：\n' + flowDesc[flow] + '\n确认开始？')) return;
+  if (!confirm(flowNames[flow] + ' 会运动机械臂和灵巧手：\\n' + flowDesc[flow] + '\\n确认开始？')) return;
   try {
     await wpost('/api/flow_start', {flow});
     setMsg(flowNames[flow] + ' 已启动');
@@ -402,7 +402,7 @@ async function gotoPoint(name) {
 
 async function saveChecked(name) {
   if (busy || writeActive) { setMsg('有运动/任务在进行，不能保存', true); return; }
-  if (!confirm('用当前位姿覆盖保存 [' + name + ']？\n会先连读 3 次确认臂没动，存完自动回读核对。')) return;
+  if (!confirm('用当前位姿覆盖保存 [' + name + ']？\\n会先连读 3 次确认臂没动，存完自动回读核对。')) return;
   busy = true; setButtons(true); setMsg('正在保存 [' + name + ']（连读 3 次确认臂停稳）…');
   try {
     const r = await fetch('/api/save_checked', {
@@ -512,7 +512,7 @@ async function wtry() {
   if (!ch) { setMsg('先输入要试写的字', true); return; }
   const p = wparams();
   if (!confirm('试写「' + ch + '」：先蘸墨一次，再写在 paper' + p.sheet +
-               ' r' + p.row + 'c' + p.col + '（约 35 秒）。\n确认手已握稳笔、笔尖朝下？')) return;
+               ' r' + p.row + 'c' + p.col + '（约 35 秒）。\\n确认手已握稳笔、笔尖朝下？')) return;
   try {
     await wpost('/api/write_start', {text: ch, sheet: p.sheet, row: p.row,
                                      col: p.col, allow_complex: true});
@@ -572,7 +572,7 @@ async function wstart() {
   if (!confirm('流程：先蘸墨一次，再从 paper' + p.sheet + ' r' + p.row + 'c' + p.col +
                ' 起写 ' + n + ' 个字（约 ' + (15 + 20 * n) + ' 秒）' +
                (p.allow_complex ? '，已放行复杂字' : '') +
-               '。\n确认：手已握稳笔、笔尖朝下、纸已铺好？')) return;
+               '。\\n确认：手已握稳笔、笔尖朝下、纸已铺好？')) return;
   try {
     await wpost('/api/write_start', p);
     setMsg('书写任务已启动');
@@ -608,7 +608,7 @@ async function pollWrite() {
     document.getElementById('wstop').disabled = !active;
     if (j.log && j.log.length) {
       wlogEl.style.display = 'block';
-      wlogEl.textContent = j.log.slice(-60).join('\n');
+      wlogEl.textContent = j.log.slice(-60).join('\\n');
       wlogEl.scrollTop = wlogEl.scrollHeight;
     }
     if (active && j.current) setMsg(j.current);
