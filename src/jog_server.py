@@ -1,4 +1,4 @@
-"""网页点动面板 —— 浏览器按钮控制机械臂在 x/y/z 方向微动。
+"""赛场调试面板 —— 浏览器访问，从上往下点一遍就是完整调试流程。
 
 架构：单文件 HTTP 服务（标准库 http.server，零新依赖），跑在连着机械臂的
 Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域网：
@@ -9,22 +9,25 @@ Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域�
 
 然后浏览器打开 http://localhost:8080
 
-比赛当天快速标定流程：页面顶部选已有航点 →「去该航点」（原地抬高→平移→降下，
-全程 move_ik 肘朝下构型全局劣后）→ 点动微调 →「覆盖保存到该航点」（新格式，
-pose+joints 同时落盘）。
+页面 6 个编号区块（操作员不需要参加过调试）：
+    第 1 步 通路测试：手三态 + 臂抬/降 5cm
+    第 2 步 取笔/还笔：自动编排（home→笔筒上方→抓笔位→手抓握→抬回）
+    第 3 步 航点标定向导：有序点位清单，保存前连读 3 次 + 写盘后回读核对
+    第 4 步 画龙点睛：全流程（取笔→蘸墨→点睛→还笔）/ 仅点睛
+    第 5 步 写字：试写一个字 + 检查字库 + 预览 + 开始书写
+    第 6 步 精细微调：jog 点动（给会的人用）
 
 注意：控制器同时只应由一个程序下发运动指令，且 CNDE 状态流只支持单连接。
 运行本面板前必须退出 teach_daemon（echo quit > /tmp/teach_cmd），反之亦然。
 急停后必须点「复位+自动模式」才能继续运动（StopMotion 会锁存停止态）。
-
-页面下方是「写字」区块（决赛流程）：公布诗题后在面板输入诗文 → 检查字库 →
-预览（dry_run，不动硬件）→ 开始书写（先蘸墨再整首写完）。写字在后台线程跑，
-复用本进程已有的 arm/hand 连接（CNDE 只允许单客户端，绝不能再起 Arm()）；
-运行期间所有会动机械臂/灵巧手的按钮和接口都被锁住，急停除外。
+任何编排/写字任务运行期间，jog/航点/其它流程全部被锁（服务端 409），
+「急停」和「停止当前任务」永远可用。
 """
 import argparse
 import contextlib
 import json
+import math
+import os
 import sys
 import threading
 import time
@@ -58,75 +61,84 @@ INDEX_HTML = """<!DOCTYPE html>
   #wlog { background: #111; color: #7f7; padding: 8px 12px; border-radius: 6px;
           height: 180px; overflow: auto; font-size: 12px; display: none; white-space: pre-wrap; }
   #wstop { background: #e80; color: #fff; border-color: #e80; font-weight: bold; }
+  h2 { font-size: 17px; margin: 6px 0 2px; }
+  .tip { font-size: 13px; color: #666; background: #f7f7f0; border-left: 3px solid #cc6;
+         padding: 6px 10px; margin: 6px 0; line-height: 1.6; }
+  .hint { font-size: 13px; color: #d33; }
+  .crow { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 14px; }
+  .crow .cname { width: 250px; }
+  .crow .cst { width: 110px; font-size: 13px; }
+  .crow .cdev { color: #282; font-size: 13px; }
+  .crow button { font-size: 14px; padding: 6px 10px; min-width: 0; }
+  .ok { color: #282; } .miss { color: #d33; font-weight: bold; }
 </style>
 </head>
 <body>
-<h1>机械臂点动面板</h1>
+<h1>赛场调试面板</h1>
 <div id="pose">位姿加载中…</div>
 <div class="row">
-  <label>航点
-    <select id="wpsel" style="font-size:16px;padding:6px;max-width:240px"></select>
-  </label>
-  <button onclick="loadWps()">刷新航点列表</button>
-  <button onclick="gotoWp()">去该航点</button>
-  <label style="font-size:14px"><input type="checkbox" id="goexact">降到底(默认停上方15mm)</label>
-  <button onclick="saveOver()">覆盖保存到该航点</button>
-</div>
-<div class="row">
-  <label>步长
-    <select id="step">
-      <option value="1">1 mm</option>
-      <option value="5" selected>5 mm</option>
-      <option value="10">10 mm</option>
-    </select>
-  </label>
-  <span style="color:#999;font-size:13px">键盘：←→=X ±↑↓=Y，PgUp/PgDn=Z</span>
-</div>
-<div class="row">
-  <button onclick="move('x',-1)">X−</button>
-  <button onclick="move('x', 1)">X+</button>
-</div>
-<div class="row">
-  <button onclick="move('y',-1)">Y−</button>
-  <button onclick="move('y', 1)">Y+</button>
-</div>
-<div class="row">
-  <button onclick="move('z',-1)">Z−</button>
-  <button onclick="move('z', 1)">Z+</button>
-</div>
-<div class="row">
-  <label>角度步长
-    <select id="rstep">
-      <option value="1">1°</option>
-      <option value="3" selected>3°</option>
-      <option value="5">5°</option>
-    </select>
-  </label>
-</div>
-<div class="row">
-  <button onclick="rmove('rx',-1)">RX−</button>
-  <button onclick="rmove('rx', 1)">RX+</button>
-  <button onclick="rmove('ry',-1)">RY−</button>
-  <button onclick="rmove('ry', 1)">RY+</button>
-  <button onclick="rmove('rz',-1)">RZ−</button>
-  <button onclick="rmove('rz', 1)">RZ+</button>
-</div>
-<div class="row">
-  <input id="wpname" placeholder="航点名，如 paper1_tl" style="font-size:16px;padding:8px;width:220px">
-  <button onclick="savewp()">存航点</button>
-</div>
-<div class="row">
-  <button onclick="resetCtl()">复位+自动模式</button>
-  <button onclick="gohome()">回 home</button>
   <button id="estop" onclick="estop()">急停</button>
+  <button id="wstop" onclick="wstop()" disabled>停止当前任务</button>
+  <button id="btnreset" onclick="resetCtl()">复位+自动模式</button>
+  <span style="color:#999;font-size:13px">急停后先「停止当前任务」再点「复位+自动模式」才能继续动</span>
 </div>
+<div id="msg"></div>
+
+<hr>
+<h2>第 1 步 · 通路测试</h2>
+<p class="tip">这一步是干嘛的：先确认手和臂都能动。手没反应检查 CAN 灯，臂没反应检查控制柜绿灯。</p>
 <div class="row">灵巧手：
   <button onclick="handCmd('open')">伸直</button>
   <button onclick="handCmd('pre')">预抓握</button>
   <button onclick="handCmd('grasp')">抓握</button>
 </div>
+<div class="row">机械臂：
+  <button onclick="moveZ(50)">抬 5cm</button>
+  <button onclick="moveZ(-50)">降 5cm</button>
+</div>
+
 <hr>
-<h1 style="font-size:18px">写字（比赛流程）</h1>
+<h2>第 2 步 · 取笔 / 还笔</h2>
+<p class="tip">这一步是干嘛的：让臂自动去笔筒抓笔 / 放回笔。<b>空手也能点，先空跑一遍确认轨迹。</b>
+按钮灰的说明缺航点（旁边会写缺哪个），先去第 3 步补齐。</p>
+<div class="row">
+  <button id="btn_pick" onclick="flowStart('pick_pen')">取笔</button>
+  <button id="btn_return" onclick="flowStart('return_pen')">还笔</button>
+  <span id="hint_pick" class="hint"></span>
+  <span id="hint_return" class="hint"></span>
+</div>
+
+<hr>
+<h2>第 3 步 · 航点标定向导</h2>
+<p class="tip">这一步是干嘛的：按从上到下的顺序把每个点位重新对一遍。点「去微调」到点位附近
+→ 需要的话用第 6 步的微调对准 → 点「保存到该点」。保存时会连读 3 次确认臂没动（晃动 ≥1mm 不让存），
+存完自动回读核对。</p>
+<div class="row">
+  <label style="font-size:14px"><input type="checkbox" id="goexact">去微调时降到底（默认停在点位上方 15mm）</label>
+  <button onclick="loadCalib()">刷新清单</button>
+  <span id="wpfile" style="color:#999;font-size:13px"></span>
+</div>
+<div id="calib"></div>
+
+<hr>
+<h2>第 4 步 · 画龙点睛</h2>
+<p class="tip">这一步是干嘛的：决赛「画龙点睛」环节演练。「点睛全流程」= 取笔 → 蘸墨 → 点睛 → 还笔；
+「仅点睛」= 手里已经有笔时用（蘸墨 → 点睛 → 抬起）。</p>
+<div class="row">
+  <button id="btn_dotfull" onclick="flowStart('dot_eye_full')">点睛全流程</button>
+  <button id="btn_dotonly" onclick="flowStart('dot_eye_only')">仅点睛</button>
+  <span id="hint_dotfull" class="hint"></span>
+  <span id="hint_dotonly" class="hint"></span>
+</div>
+
+<hr>
+<h2>第 5 步 · 写字</h2>
+<p class="tip">这一步是干嘛的：正式写字。<b>正式写之前先点「检查字库」，全绿才能写。</b>
+建议先「试写一个字」确认墨色和位置没问题。</p>
+<div class="row">试写：
+  <input id="trychar" value="烟" maxlength="2" style="font-size:18px;width:52px;text-align:center;padding:6px">
+  <button onclick="wtry()">试写这个字（先蘸墨，写在起始格）</button>
+</div>
 <div class="row">
   <textarea id="wtext" rows="3" placeholder="输入诗文，如：一去二三里烟村四五家（不要带标点）"></textarea>
 </div>
@@ -155,11 +167,54 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="wpreview()">预览</button>
   <button onclick="wdip()">蘸墨</button>
   <button onclick="wstart()">开始书写</button>
-  <button id="wstop" onclick="wstop()" disabled>停止</button>
 </div>
 <div id="wresult"></div>
 <pre id="wlog"></pre>
-<div id="msg"></div>
+
+<hr>
+<h2>第 6 步 · 精细微调</h2>
+<p class="tip">这一步是干嘛的：一般不常用，给会的人用。键盘：←→=X，↑↓=Y，PgUp/PgDn=Z。</p>
+<div class="row">
+  <label>步长
+    <select id="step">
+      <option value="1">1 mm</option>
+      <option value="5" selected>5 mm</option>
+      <option value="10">10 mm</option>
+    </select>
+  </label>
+</div>
+<div class="row">
+  <button onclick="move('x',-1)">X−</button>
+  <button onclick="move('x', 1)">X+</button>
+  <button onclick="move('y',-1)">Y−</button>
+  <button onclick="move('y', 1)">Y+</button>
+  <button onclick="move('z',-1)">Z−</button>
+  <button onclick="move('z', 1)">Z+</button>
+</div>
+<div class="row">
+  <label>角度步长
+    <select id="rstep">
+      <option value="1">1°</option>
+      <option value="3" selected>3°</option>
+      <option value="5">5°</option>
+    </select>
+  </label>
+</div>
+<div class="row">
+  <button onclick="rmove('rx',-1)">RX−</button>
+  <button onclick="rmove('rx', 1)">RX+</button>
+  <button onclick="rmove('ry',-1)">RY−</button>
+  <button onclick="rmove('ry', 1)">RY+</button>
+  <button onclick="rmove('rz',-1)">RZ−</button>
+  <button onclick="rmove('rz', 1)">RZ+</button>
+</div>
+<div class="row">
+  <input id="wpname" placeholder="航点名，如 paper1_tl" style="font-size:16px;padding:8px;width:220px">
+  <button onclick="savewp()">存航点（自由命名，不走三读核对）</button>
+</div>
+<div class="row">
+  <button onclick="gohome()">回 home</button>
+</div>
 <script>
 let busy = false;
 let writeActive = false;   // 写字/蘸墨后台任务运行中：锁住一切会动机械臂的操作
@@ -173,9 +228,9 @@ function showPose(p) {
     '  rz=' + p[5].toFixed(1);
 }
 function setButtons(disabled) {
-  // estop=硬件急停、wstop=写字停止，任何时候都不能禁用
+  // estop=硬件急停、wstop=停止当前任务、btnreset=复位，任何时候都不能禁用
   document.querySelectorAll('button').forEach(b => {
-    if (b.id !== 'estop' && b.id !== 'wstop') b.disabled = disabled;
+    if (b.id !== 'estop' && b.id !== 'wstop' && b.id !== 'btnreset') b.disabled = disabled;
   });
 }
 
@@ -222,34 +277,107 @@ async function savewp() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setMsg('已存航点 [' + name + ']');
-    loadWps();
+    loadCalib();
   } catch (e) { setMsg('保存失败：' + e.message, true); }
 }
 
-async function loadWps() {
+// ---------------- 第 1 步：通路测试 ----------------
+async function moveZ(dz) {
+  if (busy || writeActive) return;
+  busy = true; setButtons(true); setMsg((dz > 0 ? '抬' : '降') + ' 5cm 中…');
   try {
-    const r = await fetch('/api/waypoints');
+    const r = await fetch('/api/move_z', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({dz})
+    });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    const sel = document.getElementById('wpsel');
-    const prev = sel.value;
-    sel.innerHTML = '';
-    j.waypoints.forEach(w => {
-      const o = document.createElement('option');
-      o.value = w.name;
-      o.textContent = w.name + (w.has_joints ? '' : '（旧格式）');
-      sel.appendChild(o);
-    });
-    if (prev) sel.value = prev;
-  } catch (e) { setMsg('航点列表加载失败：' + e.message, true); }
+    showPose(j.pose); setMsg('完成');
+  } catch (e) { setMsg('出错：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
 }
 
-async function gotoWp() {
-  const name = document.getElementById('wpsel').value;
-  if (!name) { setMsg('先选一个航点', true); return; }
+// ---------------- 第 2/4 步：编排流程 ----------------
+const flowNames = {pick_pen: '取笔', return_pen: '还笔',
+                   dot_eye_full: '点睛全流程', dot_eye_only: '仅点睛'};
+const flowDesc = {
+  pick_pen: '回 home → 去笔筒上方 → 下降到抓笔位 → 手抓握 → 抬回',
+  return_pen: '去笔筒上方 → 下降到放笔位 → 手张开 → 抬回 → 回 home',
+  dot_eye_full: '取笔 → 蘸墨 → 点睛 → 还笔（整套）',
+  dot_eye_only: '蘸墨 → 去点睛点上方 → 下降点睛 → 抬起'
+};
+
+async function flowStart(flow) {
+  if (writeActive) { setMsg('有任务正在进行中', true); return; }
+  if (!confirm(flowNames[flow] + ' 会运动机械臂和灵巧手：\n' + flowDesc[flow] + '\n确认开始？')) return;
+  try {
+    await wpost('/api/flow_start', {flow});
+    setMsg(flowNames[flow] + ' 已启动');
+    pollWrite();
+  } catch (e) { setMsg(flowNames[flow] + ' 启动失败：' + e.message, true); }
+}
+
+// ---------------- 第 3 步：航点标定向导 ----------------
+let calibData = null;
+
+async function loadCalib() {
+  try {
+    const r = await fetch('/api/calib_points');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    calibData = j;
+    const box = document.getElementById('calib');
+    box.innerHTML = '';
+    j.points.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'crow';
+      const st = !p.exists ? '<span class="miss">✗ 缺失</span>'
+               : (p.has_joints ? '<span class="ok">✓ 已存</span>'
+                               : '<span style="color:#e80">已存(旧格式)</span>');
+      row.innerHTML = '<span class="cname">' + (i + 1) + '. ' + esc(p.key) +
+                      '　' + esc(p.label) + '</span>' +
+                      '<span class="cst">' + st + '</span>';
+      const bGo = document.createElement('button');
+      bGo.textContent = '去微调';
+      bGo.disabled = !p.exists;
+      bGo.onclick = () => gotoPoint(p.key);
+      const bSave = document.createElement('button');
+      bSave.textContent = '保存到该点';
+      bSave.onclick = () => saveChecked(p.key);
+      const dev = document.createElement('span');
+      dev.className = 'cdev';
+      dev.id = 'dev_' + p.key;
+      row.appendChild(bGo);
+      row.appendChild(bSave);
+      row.appendChild(dev);
+      box.appendChild(row);
+    });
+    // 流程按钮：缺航点直接禁用并写出缺哪个
+    const flowBtn = {pick_pen: 'btn_pick', return_pen: 'btn_return',
+                     dot_eye_full: 'btn_dotfull', dot_eye_only: 'btn_dotonly'};
+    const flowHint = {pick_pen: 'hint_pick', return_pen: 'hint_return',
+                      dot_eye_full: 'hint_dotfull', dot_eye_only: 'hint_dotonly'};
+    Object.keys(flowBtn).forEach(f => {
+      const info = j.flows[f];
+      const btn = document.getElementById(flowBtn[f]);
+      const hint = document.getElementById(flowHint[f]);
+      if (info && !info.ok) {
+        btn.disabled = true;
+        hint.textContent = flowNames[f] + '缺：' + info.missing.join(' ');
+      } else {
+        btn.disabled = false;
+        hint.textContent = '';
+      }
+    });
+    document.getElementById('wpfile').textContent =
+      j.file_mtime ? ('航点文件最后保存：' + j.file_mtime) : '';
+  } catch (e) { setMsg('点位清单加载失败：' + e.message, true); }
+}
+
+async function gotoPoint(name) {
   if (busy || writeActive) return;
   const exact = document.getElementById('goexact').checked;
-  busy = true; setButtons(true); setMsg('正在去航点 [' + name + ']（抬高→平移→降下）…');
+  busy = true; setButtons(true); setMsg('正在去 [' + name + ']（抬高→平移→降下）…');
   try {
     const r = await fetch('/api/goto_waypoint', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -258,26 +386,38 @@ async function gotoWp() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     showPose(j.pose);
-    setMsg(exact ? '已到航点 [' + name + '] 原位置（降到底）'
-                 : '已到航点 [' + name + '] 上方 15mm，按 Z− 压到纸面后微调');
-  } catch (e) { setMsg('去航点失败：' + e.message, true); }
+    // 到位后算一下与保存点的偏差（当前偏差）
+    const p = calibData && calibData.points.find(q => q.key === name);
+    if (p && p.pose) {
+      const d = Math.hypot(j.pose[0] - p.pose[0], j.pose[1] - p.pose[1],
+                           j.pose[2] - (exact ? p.pose[2] : p.pose[2] + 15));
+      const el = document.getElementById('dev_' + name);
+      if (el) el.textContent = '当前偏差 ' + d.toFixed(1) + ' mm';
+    }
+    setMsg(exact ? '已到 [' + name + '] 原位置（降到底）'
+                 : '已到 [' + name + '] 上方 15mm，要压下去用第 6 步的 Z−');
+  } catch (e) { setMsg('去点位失败：' + e.message, true); }
   finally { busy = false; setButtons(false); }
 }
 
-async function saveOver() {
-  const name = document.getElementById('wpsel').value;
-  if (!name) { setMsg('先选一个航点', true); return; }
-  if (!confirm('确认用当前位姿覆盖航点 [' + name + ']？旧值将被替换（含关节角）')) return;
+async function saveChecked(name) {
+  if (busy || writeActive) { setMsg('有运动/任务在进行，不能保存', true); return; }
+  if (!confirm('用当前位姿覆盖保存 [' + name + ']？\n会先连读 3 次确认臂没动，存完自动回读核对。')) return;
+  busy = true; setButtons(true); setMsg('正在保存 [' + name + ']（连读 3 次确认臂停稳）…');
   try {
-    const r = await fetch('/api/save', {
+    const r = await fetch('/api/save_checked', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name})
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-    setMsg('已覆盖保存航点 [' + name + ']');
-    loadWps();
-  } catch (e) { setMsg('覆盖保存失败：' + e.message, true); }
+    const el = document.getElementById('dev_' + name);
+    if (el) el.textContent = '✓已保存并核对（读数晃动 ' + j.spread_mm.toFixed(2) +
+                             'mm，回读差 ' + j.verify_mm.toFixed(2) + 'mm）';
+    setMsg('[' + name + '] ✓已保存并核对');
+    loadCalib();
+  } catch (e) { setMsg('保存失败：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
 }
 
 async function resetCtl() {
@@ -366,6 +506,21 @@ async function wpost(path, body) {
   return j;
 }
 
+// ---------------- 第 5 步：写字 ----------------
+async function wtry() {
+  const ch = document.getElementById('trychar').value.trim();
+  if (!ch) { setMsg('先输入要试写的字', true); return; }
+  const p = wparams();
+  if (!confirm('试写「' + ch + '」：先蘸墨一次，再写在 paper' + p.sheet +
+               ' r' + p.row + 'c' + p.col + '（约 35 秒）。\n确认手已握稳笔、笔尖朝下？')) return;
+  try {
+    await wpost('/api/write_start', {text: ch, sheet: p.sheet, row: p.row,
+                                     col: p.col, allow_complex: true});
+    setMsg('试写「' + ch + '」已启动');
+    pollWrite();
+  } catch (e) { setMsg('试写启动失败：' + e.message, true); }
+}
+
 async function wcheck() {
   const p = wparams();
   if (!p.text.trim()) { wres('<span style="color:#d33">先输入诗文</span>'); return; }
@@ -429,9 +584,11 @@ async function wstart() {
 }
 
 async function wstop() {
-  try { await wpost('/api/write_stop'); setMsg('已请求停止：当前笔画完成后停', true); }
+  try { await wpost('/api/write_stop'); setMsg('已请求停止：当前动作完成后停', true); }
   catch (e) { setMsg('停止请求失败：' + e.message, true); }
 }
+
+const taskNames = {write: '书写', dip: '蘸墨', ...flowNames};
 
 async function pollWrite() {
   try {
@@ -439,12 +596,13 @@ async function pollWrite() {
     const j = await r.json();
     if (!r.ok) return;
     const active = (j.status === 'running' || j.status === 'stopping');
+    const tname = taskNames[j.mode] || '任务';
     if (active && !writeActive) setButtons(true);          // 锁住所有运动按钮
     if (!active && writeActive) {                          // 刚结束：解锁 + 总结
       setButtons(false);
-      if (j.status === 'done') setMsg('书写完成');
-      else if (j.status === 'stopped') setMsg('写字已停止', true);
-      else if (j.status === 'error') setMsg('写字出错：' + (j.error || '未知'), true);
+      if (j.status === 'done') setMsg(tname + '完成');
+      else if (j.status === 'stopped') setMsg(tname + '已停止', true);
+      else if (j.status === 'error') setMsg(tname + '出错：' + (j.error || '未知'), true);
     }
     writeActive = active;
     document.getElementById('wstop').disabled = !active;
@@ -460,7 +618,7 @@ async function pollWrite() {
 refreshPose();
 setInterval(refreshPose, 2000);
 setInterval(pollWrite, 1000);
-loadWps();
+loadCalib();
 </script>
 </body>
 </html>
@@ -468,10 +626,24 @@ loadWps();
 
 
 class MockArm:
-    """无硬件调试用的假机械臂：内存里维护一个位姿。"""
+    """无硬件调试用的假机械臂：内存里维护一个位姿和一张航点表。
+
+    航点表故意只放流程需要的点（home/pen_*/ink_*/eye_dot），纸阵 paper1_* 不放，
+    这样第 3 步向导正好演示「缺失」状态。保存只进内存，绝不写真实 waypoints.json。"""
 
     def __init__(self):
         self.pose = [400.0, 0.0, 300.0, 180.0, 0.0, 0.0]
+        # 注意：刻意不设 waypoint_file 属性 —— WriteEngine 会 getattr 它来决定读哪个
+        # 航点文件，mock 下要落到默认的 src/waypoints.json（写字/蘸墨靠它）
+        self._wps = {
+            "home": {"pose": [400.0, 0.0, 300.0, 180.0, 0.0, 0.0],
+                     "joints": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+            "pen_lift": {"pose": [350.0, 100.0, 250.0, 180.0, 0.0, 0.0], "joints": None},
+            "pen_grasp": {"pose": [350.0, 100.0, 180.0, 180.0, 0.0, 0.0], "joints": None},
+            "ink_pre": {"pose": [500.0, -200.0, 290.0, 180.0, 0.0, 0.0], "joints": None},
+            "ink_dip": {"pose": [500.0, -200.0, 235.0, 180.0, 0.0, 0.0], "joints": None},
+            "eye_dot": {"pose": [300.0, -100.0, 200.0, 180.0, 0.0, 0.0], "joints": None},
+        }
 
     def enable(self, on=True):
         pass
@@ -502,20 +674,17 @@ class MockArm:
         pass
 
     def save_waypoint(self, name):
+        self._wps[name] = {"pose": list(self.pose), "joints": [0.0] * 6}
         print(f"[mock] 存航点 {name} = {self.pose}")
 
     def list_waypoints(self):
-        return {
-            "home": {"pose": [400.0, 0.0, 300.0, 180.0, 0.0, 0.0], "joints": None},
-            "eye_dot": {"pose": [300.0, -100.0, 200.0, 180.0, 0.0, 0.0],
-                        "joints": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
-        }
+        return {k: {"pose": list(v["pose"]), "joints": v["joints"]}
+                for k, v in self._wps.items()}
 
     def get_waypoint(self, name):
-        wps = self.list_waypoints()
-        if name not in wps:
-            raise KeyError(f"航点 [{name}] 不存在，已有: {list(wps)}")
-        return list(wps[name]["pose"])
+        if name not in self._wps:
+            raise KeyError(f"航点 [{name}] 不存在，已有: {list(self._wps)}")
+        return list(self._wps[name]["pose"])
 
     def move_ik(self, pose, vel=10.0, blocking=True):
         time.sleep(0.3)
@@ -524,8 +693,12 @@ class MockArm:
     def move_to(self, pose, vel=10.0, blocking=True):
         self.move_ik(pose, vel, blocking)
 
+    def move_joints(self, joints, vel=20.0, blocking=True):
+        time.sleep(0.3)  # mock 里关节角和位姿不挂钩，假装动完了
+
     def get_waypoint_joints(self, name):
-        return None
+        wp = self._wps.get(name)
+        return wp["joints"] if wp else None
 
 
 _arm = None
@@ -611,7 +784,7 @@ def _write_progress(msg):
 
 
 def _write_finish(status, error=None):
-    tail = {"done": "== 全部完成 ==", "stopped": "== 已停止（当前笔画完成后停）==",
+    tail = {"done": "== 全部完成 ==", "stopped": "== 已停止（当前动作完成后停）==",
             "error": f"== 出错中止：{error} =="}.get(status, status)
     with _write_lock:
         _write["status"] = status
@@ -643,7 +816,7 @@ class _WriteAbort(Exception):
     """操作员在面板点了「停止」。"""
 
 
-def _make_engine(allow_complex):
+def _make_engine_once(allow_complex):
     """复用本进程已有的 arm/hand 连接造写字引擎（CNDE 只允许单客户端，不能再起 Arm()）。"""
     we = get_engine_mod()
 
@@ -658,6 +831,184 @@ def _make_engine(allow_complex):
     return _JogWriteEngine(get_arm(), get_hand(), allow_complex=allow_complex)
 
 
+def _make_engine(allow_complex):
+    """造引擎，失败重试一次：初始化要读 strokes_cache.json/waypoints.json，
+    预抓进程正在写缓存时可能读到半截 JSON，等 2s 再试。"""
+    try:
+        return _make_engine_once(allow_complex)
+    except Exception:                           # noqa: BLE001
+        time.sleep(2)
+        return _make_engine_once(allow_complex)
+
+
+# ============================================================================
+# 编排流程（第 2 步取笔/还笔、第 4 步画龙点睛）：后台线程 + _move_lock 互斥，
+# 步与步之间检查停止标志。竖直移动一律 move_ik（MoveL 会撞奇异点）。
+# ============================================================================
+GOTO_TRAVEL_Z = 300.0     # 三段式转场高度（与 /api/goto_waypoint 一致）
+
+CALIB_POINTS = [          # 第 3 步向导的有序点位清单（从上到下 = 示教顺序）
+    ("home", "回零点"),
+    ("pen_grasp", "抓笔位（笔尖进筒、手合拢的位置）"),
+    ("pen_lift", "笔筒上方（悬停位）"),
+    ("ink_pre", "墨碟上方"),
+    ("ink_dip", "蘸墨点（笔尖进墨）"),
+    ("eye_dot", "画龙点睛点"),
+    ("paper1_tl", "纸1 左上角"),
+    ("paper1_tr", "纸1 右上角"),
+    ("paper1_bl", "纸1 左下角"),
+    ("paper1_br", "纸1 右下角"),
+    ("paper1_cell00_tl", "第 0 格十字中心"),
+    ("paper1_cell00_corner_tr", "第 0 格田字格右上角"),
+]
+
+FLOW_LABELS = {"pick_pen": "取笔", "return_pen": "还笔",
+               "dot_eye_full": "点睛全流程", "dot_eye_only": "仅点睛"}
+FLOW_WAYPOINTS = {        # 每个流程缺哪个航点就不许跑（按钮禁用 + 服务端再拦一次）
+    "pick_pen": ["home", "pen_lift", "pen_grasp"],
+    "return_pen": ["home", "pen_lift", "pen_grasp"],
+    "dot_eye_full": ["home", "pen_lift", "pen_grasp", "ink_dip", "eye_dot"],
+    "dot_eye_only": ["ink_dip", "eye_dot"],
+}
+
+
+def _goto_wp(arm, name, final_dz=0.0):
+    """三段式去航点：原地抬高 → 平移 → 竖直降下，全程 move_ik（与「去微调」同逻辑）。
+    final_dz>0 时停在点位上方（默认降到底）。"""
+    wp = arm.get_waypoint(name)
+    cur = arm.get_pose()
+    safe_z = max(GOTO_TRAVEL_Z, cur[2], wp[2] + 50.0)  # 转场高度不低于目标上方 50mm
+    high = cur[:]; high[2] = safe_z
+    arm.move_ik(high, vel=10)
+    arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
+    arm.move_ik([wp[0], wp[1], wp[2] + final_dz, wp[3], wp[4], wp[5]], vel=5)
+
+
+def _build_flow_steps(flow):
+    """把流程展开成 [(步骤名, 动作), ...]，每步之间会检查停止标志。"""
+    arm = get_arm()
+    hand = get_hand()
+
+    def go_home():
+        hj = arm.get_waypoint_joints("home")
+        if hj is not None:
+            arm.move_joints(hj, vel=10)      # 有关节角走关节空间：任意姿态都回得来
+        else:
+            _goto_wp(arm, "home")            # 旧格式兜底：三段式 move_ik
+
+    def vertical_to(name, why):
+        # 竖直移动一律 move_ik（翻腕姿态下 MoveL 撞奇异点，write_engine 同款教训）
+        arm.move_ik(arm.get_waypoint(name), vel=5)
+
+    def grasp():
+        if hand is None:
+            print("[mock] 无灵巧手，跳过抓握动作")
+        else:
+            hand.grasp_pen()
+        time.sleep(1.0)                      # 等手指收拢再抬笔
+
+    def release():
+        if hand is None:
+            print("[mock] 无灵巧手，跳过张开动作")
+        else:
+            hand.open()
+        time.sleep(1.0)
+
+    def dip():
+        _make_engine(allow_complex=True).dip_ink()   # 复用 write_engine 验证过的蘸墨
+
+    def dot_down():
+        vertical_to("eye_dot", "下降点睛")
+        time.sleep(0.5)                      # 停半秒让墨点上纸
+
+    def dot_up():
+        wp = arm.get_waypoint("eye_dot")
+        arm.move_ik([wp[0], wp[1], wp[2] + 50.0, wp[3], wp[4], wp[5]], vel=5)
+
+    steps = []
+    if flow in ("pick_pen", "dot_eye_full"):
+        steps += [("回 home", go_home),
+                  ("去笔筒上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
+                  ("下降到抓笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到抓笔位")),
+                  ("手抓握（抓笔）", grasp),
+                  ("抬回笔筒上方 pen_lift", lambda: vertical_to("pen_lift", "抬回笔筒上方"))]
+    if flow in ("dot_eye_full", "dot_eye_only"):
+        steps += [("蘸墨", dip),
+                  ("去点睛点上方 50mm", lambda: _goto_wp(arm, "eye_dot", final_dz=50.0)),
+                  ("下降点睛", dot_down),
+                  ("抬起 50mm", dot_up)]
+    if flow in ("return_pen", "dot_eye_full"):
+        steps += [("去笔筒上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
+                  ("下降到放笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到放笔位")),
+                  ("手张开（放笔）", release),
+                  ("抬回笔筒上方 pen_lift", lambda: vertical_to("pen_lift", "抬回笔筒上方")),
+                  ("回 home", go_home)]
+    return steps
+
+
+def _flow_worker(flow):
+    """流程后台线程：逐步行进，步间响应停止；崩溃只置 error，绝不搞死 server。"""
+    label = FLOW_LABELS.get(flow, flow)
+    tee = _LogTee()
+    try:
+        with contextlib.redirect_stdout(tee):
+            steps = _build_flow_steps(flow)
+            n = len(steps)
+            for i, (slabel, fn) in enumerate(steps, 1):
+                if _write_stop.is_set():
+                    raise _WriteAbort()
+                _write_progress(f"{label} 第 {i}/{n} 步：{slabel}")
+                fn()
+        tee.flush()
+        _write_finish("stopped" if _write_stop.is_set() else "done")
+    except _WriteAbort:
+        tee.flush()
+        _write_finish("stopped")
+    except Exception as e:                          # noqa: BLE001
+        tee.flush()
+        _write_finish("error", str(e))
+    finally:
+        _move_lock.release()
+
+
+def _start_task(mode, target, args=()):
+    """启动后台任务（写字/蘸墨/流程共用）。返回错误字符串，None = 成功。"""
+    with _write_lock:
+        if _write["status"] in ("running", "stopping"):
+            return "有任务正在进行中（看页面顶部状态）"
+    if not _move_lock.acquire(blocking=False):      # 与点动/航点/回home互斥
+        return "有点动或航点运动正在进行，等它结束再启动"
+    _write_stop.clear()
+    with _write_lock:
+        _write.update({"status": "running", "mode": mode, "current": "启动中…",
+                       "error": None, "log": []})
+    threading.Thread(target=target, args=args, daemon=True).start()
+    return None
+
+
+def _checked_save(arm, name):
+    """保存航点的纪律（修下拉框误存 + 脏数据两个真实事故）：
+    连读 3 次当前位姿（间隔 0.5s），三次相差 <1mm 才允许保存；
+    写盘后立刻回读 waypoints 比对。返回 (晃动mm, 回读差mm, 落盘位姿)。"""
+    reads = []
+    for i in range(3):
+        reads.append(arm.get_pose())
+        if i < 2:
+            time.sleep(0.5)
+    spread = max(math.dist(reads[a][:3], reads[b][:3])
+                 for a, b in ((0, 1), (0, 2), (1, 2)))
+    if spread >= 1.0:
+        raise RuntimeError(
+            f"三次读数晃动 {spread:.2f}mm ≥ 1mm：手臂还在动或没停稳，没保存。"
+            f"等臂完全停稳再点")
+    arm.save_waypoint(name)
+    back = arm.get_waypoint(name)
+    verify = math.dist(back[:3], reads[-1][:3])
+    if verify >= 1.0:
+        raise RuntimeError(f"写盘后回读比对失败：差 {verify:.2f}mm（航点文件写入有问题）")
+    return spread, verify, back
+
+
 def _write_worker(mode, text, sheet, start_row, start_col, allow_complex):
     """写字后台线程：先蘸墨再逐字写。逐字循环的布局逻辑与 WriteEngine.write_text
     一致（写满一行换行、写满一页翻纸），逐字调用是为了报进度和在字间响应停止。
@@ -665,13 +1016,7 @@ def _write_worker(mode, text, sheet, start_row, start_col, allow_complex):
     tee = _LogTee()
     try:
         with contextlib.redirect_stdout(tee):
-            try:
-                eng = _make_engine(allow_complex)
-            except Exception:                           # noqa: BLE001
-                # 引擎初始化要读 strokes_cache.json/waypoints.json：预抓进程正在写缓存时
-                # 可能读到半截 JSON，等 2s 重试一次再放弃
-                time.sleep(2)
-                eng = _make_engine(allow_complex)
+            eng = _make_engine(allow_complex)
             _write_progress("蘸墨…")
             eng.dip_ink()
             if mode == "write":
@@ -708,18 +1053,8 @@ def _write_worker(mode, text, sheet, start_row, start_col, allow_complex):
 
 def _start_write_task(mode, text="", sheet=1, row=1, col=1, allow_complex=True):
     """启动写字/蘸墨后台线程。返回错误字符串，None = 成功。"""
-    with _write_lock:
-        if _write["status"] in ("running", "stopping"):
-            return "写字任务正在进行中"
-    if not _move_lock.acquire(blocking=False):      # 与点动/航点/回home互斥
-        return "有点动或航点运动正在进行，等它结束再启动写字"
-    _write_stop.clear()
-    with _write_lock:
-        _write.update({"status": "running", "mode": mode, "current": "启动中…",
-                       "error": None, "log": []})
-    threading.Thread(target=_write_worker,
-                     args=(mode, text, sheet, row, col, allow_complex), daemon=True).start()
-    return None
+    return _start_task(mode, _write_worker,
+                       (mode, text, sheet, row, col, allow_complex))
 
 
 def _write_preview(text, sheet, start_row, start_col, allow_complex):
@@ -793,6 +1128,25 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/write_status":
             with _write_lock:
                 self._send_json(dict(_write))
+        elif self.path == "/api/calib_points":
+            # 第 3 步向导：有序点位清单 + 各流程缺航点情况（前端禁用缺点的流程按钮）
+            try:
+                arm = get_arm()
+                wps = arm.list_waypoints()
+                points = [{"key": k, "label": lbl, "exists": k in wps,
+                           "has_joints": bool(wps.get(k, {}).get("joints")) if k in wps else False,
+                           "pose": wps[k]["pose"] if k in wps else None}
+                          for k, lbl in CALIB_POINTS]
+                flows = {f: {"ok": not [w for w in names if w not in wps],
+                             "missing": [w for w in names if w not in wps]}
+                         for f, names in FLOW_WAYPOINTS.items()}
+                mtime = None
+                wpf = getattr(arm, "waypoint_file", None)
+                if wpf and os.path.exists(wpf):
+                    mtime = time.strftime("%m-%d %H:%M:%S", time.localtime(os.path.getmtime(wpf)))
+                self._send_json({"points": points, "flows": flows, "file_mtime": mtime})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -906,10 +1260,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 hand = get_hand()
-                with _write_lock:           # 写字期间手必须保持握笔，任何手部动作都禁止
+                with _write_lock:           # 任务运行期间手必须保持不动，任何手部动作都禁止
                     writing = _write["status"] in ("running", "stopping")
                 if writing:
-                    raise RuntimeError("写字/蘸墨进行中，禁止手部动作（手里握着笔）")
+                    raise RuntimeError("有任务（写字/取笔/点睛等）进行中，禁止手部动作")
                 if hand is not None:
                     if action == "open":
                         hand.open()
@@ -937,6 +1291,76 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"请求参数错误: {e}"}, 400)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/move_z":
+            # 第 1 步通路测试：抬/降 5cm（上限 ±50mm，比 jog 微调的 20mm 宽）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                dz = max(-50.0, min(50.0, float(req["dz"])))
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                arm.move_rel_ik(dz=dz, vel=DEFAULT_VEL)   # IK+关节空间，避免 MoveL 奇异点
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
+        elif self.path == "/api/save_checked":
+            # 第 3 步向导的保存：连读 3 次确认臂停稳 + 写盘后回读核对
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                name = str(req["name"]).strip()
+                if not name:
+                    raise ValueError("航点名不能为空")
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            if not _move_lock.acquire(blocking=False):
+                # 有运动在跑时读数必然不稳，直接拒（也算一层防误存）
+                self._send_json({"error": "有运动正在进行，不能保存航点"}, 409)
+                return
+            try:
+                spread, verify, pose = _checked_save(get_arm(), name)
+                self._send_json({"ok": True, "spread_mm": round(spread, 3),
+                                 "verify_mm": round(verify, 3), "pose": pose})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
+        elif self.path == "/api/flow_start":
+            # 第 2/4 步编排流程：缺航点明确报错禁止执行（前端按钮也是灰的）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                flow = str(req["flow"]).strip()
+                if flow not in FLOW_WAYPOINTS:
+                    raise ValueError(f"未知流程 {flow!r}（可选 {'/'.join(FLOW_WAYPOINTS)}）")
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            try:
+                wps = get_arm().list_waypoints()
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+                return
+            missing = [w for w in FLOW_WAYPOINTS[flow] if w not in wps]
+            if missing:
+                self._send_json({"error": f"缺航点，不能执行{FLOW_LABELS[flow]}："
+                                          f"{' '.join(missing)}（先去第 3 步补齐）",
+                                 "missing": missing}, 400)
+                return
+            err = _start_task(flow, _flow_worker, (flow,))
+            if err:
+                self._send_json({"error": err}, 409)
+            else:
+                self._send_json({"ok": True, "flow": flow})
         elif self.path == "/api/write_check":
             # 检查字库：逐字查本地缓存（offline，不联网），缺字列出来
             try:
@@ -1018,7 +1442,7 @@ class Handler(BaseHTTPRequestHandler):
             with _write_lock:
                 if _write["status"] == "running":
                     _write["status"] = "stopping"
-            _write_log("== 收到停止请求：当前笔画完成后停 ==")
+            _write_log("== 收到停止请求：当前动作完成后停 ==")
             self._send_json({"ok": True})
         else:
             self._send_json({"error": "not found"}, 404)
