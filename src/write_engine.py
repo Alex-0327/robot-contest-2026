@@ -57,7 +57,7 @@ DEFAULT_WP_FILE = os.path.join(HERE, "waypoints.json")
 # ============================================================================
 RETRACT_MM = 5.0          # 笔画间抬笔高度（任务书要求 5mm 换笔）
 SAFE_HOP_MM = 50.0        # 进入/离开一个字时的高度（任务书要求先到落点上方 5cm）
-TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（墨碟上方 z≈291，再抬 50 不可达 err=38）
+TRANSIT_Z_MM = 280.0      # 进字转场高度：已高于此就不再抬（砚台上方 z≈291，再抬 50 不可达 err=38）
 SHORT_MOVE_MM = 30.0      # 笔画间距小于此值：就在 5mm 高度直接平移，不来回升降
                           # （12→30：5mm 平移模式 10-12 已验收；字内多数笔距 <30mm，
                           #  少一次 50mm 慢速落笔每字省 ~3-6s）
@@ -462,8 +462,12 @@ class WriteEngine:
 
     # ---------------------------------------------------------------- 执行
     def dip_ink(self, dwell_s=1.5):
-        """蘸墨：当前位 → 抬转场高 → 走廊(2→1) → 墨碟上方(ink_pre) → 垂直下探 ink_dip
-        → 停 dwell → 抬回 ink_pre。之后第一个字的远距进字逻辑会自动走走廊回纸。"""
+        """蘸墨：当前位 → 抬转场高 → 走廊(2→1，若示教过) → 砚台上方(ink_pre) → 垂直下探 ink_dip
+        → 停 dwell → 抬回 ink_pre。之后第一个字的远距进字逻辑会自动走走廊回纸。
+
+        10-14 新布局：笔筒与砚台相邻（约 17.5cm），砚台→纸的路径不再跨笔筒，
+        走廊点（ink_corridor_1/2）变成可选——现场实测直飞不剐蹭就不用示教；
+        若仍有剐蹭，在砚台与纸之间示教 1~2 个高空点即可，代码自动捡用。"""
         self.check_ready()
         cur = self.arm.get_pose()
         if cur[2] < TRANSIT_Z_MM - 1.0:
@@ -475,7 +479,7 @@ class WriteEngine:
                 print(f"  [转场] 过走廊点 {cn}")
         if "ink_pre" in self.wp:
             self.arm.move_ik(self._need("ink_pre"), vel=TRANSIT_VEL)
-            print("  [转场] 到墨碟上方 ink_pre")
+            print("  [转场] 到砚台上方 ink_pre")
         dip = self._need("ink_dip")
         self._vertical(dip, "蘸墨下探")
         time.sleep(dwell_s)
@@ -504,9 +508,10 @@ class WriteEngine:
             if prev_end is None:
                 # 进字：①原地抬高 ②平移到落点上方 ③下降（三段式，禁止直飞）
                 cur = self.arm.get_pose()
-                # 绕笔筒走廊：笔挂在 TCP 下约 18cm，墨碟→纸直飞会在笔筒顶部剐蹭
-                # （10-12 实测撞笔筒）。只有从远处（墨碟侧）进字才走走廊；
-                # 格间短距转移不绕（10-12 连写「日月」：每字绕走廊浪费 ~10s）
+                # 高空走廊（可选）：笔挂在 TCP 下约 18cm。10-12 旧布局墨碟→纸直飞撞过笔筒；
+                # 10-14 新布局笔筒挪到砚台旁边、不在路径上，走廊点可不示教。
+                # 只有从远处（砚台侧）进字才可能走走廊（若示教过）；
+                # 格间短距转移不走（10-12 连写「日月」：每字绕走廊浪费 ~10s）
                 entry = fr.air(start, SAFE_HOP_MM)
                 far = math.dist(cur[:2], entry[:2]) > 200.0
                 if far:
