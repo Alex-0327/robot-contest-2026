@@ -10,10 +10,10 @@
       "th_rot": 70
     },
     "step2_fingers": {
-      "ff_mcp": 40,
-      "ff_dip": 30,
-      "mf_mcp": 40,
-      "mf_dip": 30
+      "ff_mcp": 35,
+      "ff_dip": 25,
+      "mf_mcp": 35,
+      "mf_dip": 25
     }
   },
   "grasp": {
@@ -31,6 +31,7 @@
   "caution": [
     "纯位置控制，禁用 set_pressure_limit（本固件会使电机停在半路）",
     "th_rot 于 2026-10-11 晚由 60 微调至 70，ff_mcp 由 60 微调至 70（笔尖垂直度校正）",
-    "2026-10-12 写字实测笔杆微滑：ff_mcp 70→75, mf_mcp 75→80, th_mcp 55→60"
+    "2026-10-12 写字实测笔杆微滑：ff_mcp 70→75, mf_mcp 75→80, th_mcp 55→60",
+    "2026-10-15 预抓握弯曲指统一松 5°（ff_mcp/mf_mcp 40→35, ff_dip/mf_dip 30→25）：进筒通道更宽"
   ]
 }

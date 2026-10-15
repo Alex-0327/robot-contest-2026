@@ -2,3 +2,4 @@
 sdk/
 __pycache__/
 *.log
+kimi-debug-session*.zip

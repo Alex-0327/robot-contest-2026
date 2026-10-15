@@ -462,12 +462,13 @@ class WriteEngine:
 
     # ---------------------------------------------------------------- 执行
     def dip_ink(self, dwell_s=1.5):
-        """蘸墨：当前位 → 抬转场高 → 走廊(2→1，若示教过) → 砚台上方(ink_pre) → 垂直下探 ink_dip
-        → 停 dwell → 抬回 ink_pre。之后第一个字的远距进字逻辑会自动走走廊回纸。
+        """蘸墨：当前位 → 抬转场高 → 走廊(2→1，若示教过) → 蘸墨前悬停(ink_pre)
+        → 垂直下探 ink_dip → 停 dwell → 抬到蘸墨后悬停(ink_post，刚离砚台即可)
+        → 原地 ±8mm 抖墨往返 2 次甩浮墨。之后第一个字的远距进字逻辑会自动抬升回纸。
 
-        10-14 新布局：笔筒与砚台相邻（约 17.5cm），砚台→纸的路径不再跨笔筒，
-        走廊点（ink_corridor_1/2）变成可选——现场实测直飞不剐蹭就不用示教；
-        若仍有剐蹭，在砚台与纸之间示教 1~2 个高空点即可，代码自动捡用。"""
+        10-15 新航点方案：ink_post 比 ink_pre 低（砚台→纸/点睛不经过笔筒，不用抬回去，
+        省时间）；没标 ink_post 时退回抬到 ink_pre（老行为）。走廊点（ink_corridor_1/2）
+        可选——现场实测直飞不剐蹭就不用示教；剐蹭就在砚台与纸之间示教 1~2 个高空点。"""
         self.check_ready()
         cur = self.arm.get_pose()
         if cur[2] < TRANSIT_Z_MM - 1.0:
@@ -479,16 +480,24 @@ class WriteEngine:
                 print(f"  [转场] 过走廊点 {cn}")
         if "ink_pre" in self.wp:
             self.arm.move_ik(self._need("ink_pre"), vel=TRANSIT_VEL)
-            print("  [转场] 到砚台上方 ink_pre")
+            print("  [转场] 到蘸墨前悬停 ink_pre")
         dip = self._need("ink_dip")
         self._vertical(dip, "蘸墨下探")
         time.sleep(dwell_s)
-        if "ink_pre" in self.wp:
+        if "ink_post" in self.wp:
+            post = self._need("ink_post")
+            self._vertical(post, "抬到蘸墨后悬停")
+            for i, dx in enumerate((8.0, -16.0, 16.0, -8.0), 1):   # ±8mm 抖墨往返 2 次
+                nxt = list(post); nxt[0] += dx
+                self._vertical(nxt, f"抖墨第 {i}/4 段", vel=DESCEND_VEL)
+                time.sleep(0.15)
+            self._vertical(post, "抖墨回中")
+        elif "ink_pre" in self.wp:
             self._vertical(self._need("ink_pre"), "蘸墨抬笔")
         else:
             lifted = list(dip); lifted[2] = dip[2] + SAFE_HOP_MM
             self._vertical(lifted, "蘸墨抬笔")
-        print(f"[蘸墨] 完成（停 {dwell_s}s）")
+        print(f"[蘸墨] 完成（停 {dwell_s}s，已抖墨）")
 
     def write_char(self, ch, sheet=1, row=1, col=1, dry_run=False):
         """写一个字。dry_run=True 只打印计划不动硬件。"""

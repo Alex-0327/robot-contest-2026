@@ -14,7 +14,8 @@ OPEN = dict(th_rot=0, th_mcp=0, th_dip=0, ff_spr=0,
 # 握笔姿态（10-11 真机实测调定，抓取加粗圆筒笔杆稳定悬吊不滑脱）：
 # 顺序要点：拇指先旋转到位（保持伸直），再弯曲——旋转和弯曲同时进行会顶到食指。
 # 与 data/grasp_params.json 一致，改这里要同步改数据集。
-PEN_PRE_GRASP_FINGERS = dict(ff_mcp=40, ff_dip=30, mf_mcp=40, mf_dip=30)
+# 10-15 预抓握弯曲指统一松 5°（40/30→35/25）：进筒通道更宽，下降不易刮筒口
+PEN_PRE_GRASP_FINGERS = dict(ff_mcp=35, ff_dip=25, mf_mcp=35, mf_dip=25)
 PEN_PRE_GRASP_THUMB = dict(th_rot=70)  # 预成形时拇指只旋转、保持伸直，给下降留通道
 
 # 最终握紧姿态（绝对角度）

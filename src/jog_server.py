@@ -11,10 +11,10 @@ Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域�
 
 页面 6 个编号区块（操作员不需要参加过调试）：
     第 1 步 通路测试：手三态 + 臂抬/降 5cm
-    第 2 步 取笔/还笔：自动编排（抬到高位越筒内笔顶→笔筒正上方→手预抓握→垂直下降抓/放）
-    第 3 步 航点标定向导：有序点位清单（先砚台区、再笔筒区——去笔筒区自动抬高位
-             越过筒内笔顶），保存前连读 3 次 + 写盘后回读核对
-    第 4 步 画龙点睛：全流程（取笔→蘸墨→点睛→还笔）/ 仅点睛
+    第 2 步 取笔/还笔：自动编排（home→高位去预抓握点→预抓握→降抓握位→抓握→抬回）
+    第 3 步 航点标定向导：有序点位清单（home → 笔/墨/点睛 9 点 → 点睛跑通后再纸面 6 点），
+             保存前连读 3 次 + 写盘后回读核对
+    第 4 步 画龙点睛：全流程（取笔→蘸墨+抖墨→点睛→还笔）/ 仅点睛
     第 5 步 写字：试写一个字 + 检查字库 + 预览 + 开始书写
     第 6 步 精细微调：jog 点动（第 3 步对不准时用）
 
@@ -124,11 +124,17 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <hr>
 <h2>第 3 步 · 航点标定向导</h2>
-<p class="tip">这一步是干嘛的：按从上到下的顺序把每个点位重新对一遍（先砚台区 ink_pre/ink_dip，
-再笔筒区 pen_lift/pen_grasp，最后纸面点）。点「去微调」到点位附近 → 需要的话用第 6 步的微调对准
-→ 点「保存到该点」。保存时会连读 3 次确认臂没动（晃动 ≥1mm 不让存），存完自动回读核对。
-<b>注意：笔筒贴着砚台、筒内笔比砚台高，用第 6 步手动微调时，严禁在低位横向挪向笔筒——
-先 Z+ 抬到高过筒内笔顶再横移（点「去微调」会自动抬高，手动挪不会）。</b></p>
+<p class="tip">这一步是干嘛的：按从上到下的顺序标定。<b>顺序：home → 笔/墨/点睛 9 点 →
+（点睛全流程跑通后）纸面 6 点。</b>笔墨点睛 9 点的标定手法（对着下面清单做）：<br>
+① 第 6 步「飞到坐标」到笔筒上方（悬停Z≥250）→ 微调到预抓握悬停 → 存 pen_lift<br>
+② 点 预抓握（第 1 步）→ Z− 微调下降到抓握位 → 存 pen_grasp<br>
+③ 点 抓握 → Z+ 竖直抬高到笔完全脱离笔筒 → <b>覆盖存 pen_lift</b>（这步之后笔不离手）<br>
+④ 保持 z 不变，XY 微调到砚台上方 → 存 ink_pre → Z− 下降到笔尖浸入墨约 5mm → 存 ink_dip<br>
+⑤ Z+ 抬到刚脱离砚台（不用回 ink_pre 高度）→ 存 ink_post<br>
+⑥「飞到坐标」到龙眼睛上方 → 微调 → 存 eye_pre → Z− 下降到笔尖刚好触纸 → 存 eye_dot<br>
+⑦ Z+ 抬到与 pen_lift 的 z 等高（看顶部位姿显示的 z 数值对齐）→ 存 eye_post<br>
+保存时会连读 3 次确认臂没动（晃动 ≥1mm 不让存），存完自动回读核对。
+<b>手动微调时严禁在低位横向挪向笔筒——先 Z+ 抬到高过筒内笔顶再横移。</b></p>
 <div class="row">
   <label style="font-size:14px"><input type="checkbox" id="goexact">去微调时降到底（默认停在点位上方 15mm）</label>
   <button onclick="loadCalib()">刷新清单</button>
@@ -138,8 +144,10 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <hr>
 <h2>第 4 步 · 画龙点睛</h2>
-<p class="tip">这一步是干嘛的：决赛「画龙点睛」环节演练。「点睛全流程」= 取笔 → 蘸墨 → 点睛 → 还笔；
-「仅点睛」= 手里已经有笔时用（蘸墨 → 点睛 → 抬起）。</p>
+<p class="tip">这一步是干嘛的：决赛「画龙点睛」环节演练。「点睛全流程」= 回home → 取笔 →
+蘸墨前悬停 → 蘸墨+抖墨 → 预点睛 → 点睛 → 抬到点睛后 → 等高回笔筒还笔 → 回home；
+「仅点睛」= 手里已经有笔时用（蘸墨 → 点睛 → 抬到点睛后）。<b>先空手空跑一遍确认轨迹，
+跑通全流程后再去第 3 步标纸面 6 点。</b></p>
 <div class="row">
   <button id="btn_dotfull" onclick="flowStart('dot_eye_full')">点睛全流程</button>
   <button id="btn_dotonly" onclick="flowStart('dot_eye_only')">仅点睛</button>
@@ -330,10 +338,10 @@ async function moveZ(dz) {
 const flowNames = {pick_pen: '取笔', return_pen: '还笔',
                    dot_eye_full: '点睛全流程', dot_eye_only: '仅点睛'};
 const flowDesc = {
-  pick_pen: '回 home → 抬到高位（越过筒内笔顶）→ 笔筒正上方 → 手预抓握 → 垂直下降到抓笔位 → 手抓握 → 抬回',
-  return_pen: '抬到高位 → 笔筒正上方 → 垂直下降到放笔位 → 手张开 → 抬回高位 → 回 home',
-  dot_eye_full: '取笔 → 蘸墨 → 点睛 → 还笔（整套）',
-  dot_eye_only: '蘸墨 → 去点睛点上方 → 下降点睛 → 抬起'
+  pick_pen: '回 home → 抬高位去预抓握点 → 手预抓握 → 降到抓握位 → 抓握 → 抬回预抓握点',
+  return_pen: '去预抓握点 → 降到抓握位 → 手松成预抓握 → 抬回 → 手伸直 → 回 home',
+  dot_eye_full: '取笔 → 蘸墨前悬停 → 蘸墨+抖墨 → 预点睛 → 点睛 → 点睛后 → 还笔（整套）',
+  dot_eye_only: '蘸墨前悬停 → 蘸墨+抖墨 → 预点睛 → 点睛 → 抬到点睛后（手里已有笔时用）'
 };
 
 async function flowStart(flow) {
@@ -709,9 +717,12 @@ class MockArm:
             # 新布局：笔筒与砚台相邻（约 17.5cm），mock 里也摆在一起
             "pen_lift": {"pose": [500.0, -375.0, 250.0, 180.0, 0.0, 0.0], "joints": None},
             "pen_grasp": {"pose": [500.0, -375.0, 180.0, 180.0, 0.0, 0.0], "joints": None},
-            "ink_pre": {"pose": [500.0, -200.0, 290.0, 180.0, 0.0, 0.0], "joints": None},
-            "ink_dip": {"pose": [500.0, -200.0, 235.0, 180.0, 0.0, 0.0], "joints": None},
+            "ink_pre": {"pose": [500.0, -200.0, 250.0, 180.0, 0.0, 0.0], "joints": None},
+            "ink_dip": {"pose": [500.0, -200.0, 195.0, 180.0, 0.0, 0.0], "joints": None},
+            "ink_post": {"pose": [500.0, -200.0, 215.0, 180.0, 0.0, 0.0], "joints": None},
+            "eye_pre": {"pose": [300.0, -100.0, 250.0, 180.0, 0.0, 0.0], "joints": None},
             "eye_dot": {"pose": [300.0, -100.0, 200.0, 180.0, 0.0, 0.0], "joints": None},
+            "eye_post": {"pose": [300.0, -100.0, 250.0, 180.0, 0.0, 0.0], "joints": None},
         }
 
     def enable(self, on=True):
@@ -924,15 +935,18 @@ PEN_TRAVEL_Z = 340.0      # 笔筒区横移高度下限：必须高过筒内竖�
                           # 再点流程/去微调，并把情况告诉程序组调这个数
 
 CALIB_POINTS = [          # 第 3 步向导的有序点位清单（从上到下 = 示教顺序）
-    # 10-14 新布局：笔筒与砚台相邻，先标砚台区（ink_pre/ink_dip）再标笔筒区
-    # （pen_lift/pen_grasp）。去笔筒区时面板自动抬到 PEN_TRAVEL_Z 越过筒内笔顶
+    # 10-15 点睛优先：先标 home + 笔/墨/点睛共 9 点，点睛全流程跑通后再标纸面 6 点。
+    # 笔筒区只从正上方垂直进出：去笔筒区面板自动抬到 PEN_TRAVEL_Z 越过筒内笔顶
     ("home", "回零点（★开场第一个标它：x≈0 高位收拢，别罩桌面任何东西上方）"),
-    ("ink_pre", "砚台上方（悬停位，接近笔筒区的中转点）"),
-    ("ink_dip", "蘸墨点（笔尖进墨）"),
-    ("pen_lift", "笔筒上方（悬停位）"),
-    ("pen_grasp", "抓笔位（笔尖进筒、手合拢的位置）"),
-    ("eye_dot", "画龙点睛点"),
-    ("paper1_tl", "纸1 左上角"),
+    ("pen_lift", "预抓握点（笔筒上方悬停；抓笔后抬到笔脱筒，要再覆盖存一次）"),
+    ("pen_grasp", "抓握位（笔尖进筒、手合拢的位置）"),
+    ("ink_pre", "蘸墨前悬停（砚台上方，从预抓握点等高平移过来）"),
+    ("ink_dip", "蘸墨点（笔尖浸入墨汁约 5mm）"),
+    ("ink_post", "蘸墨后悬停（刚脱离砚台即可，不用回到蘸墨前高度）"),
+    ("eye_pre", "预点睛（龙眼睛上方悬停，飞到坐标+微调）"),
+    ("eye_dot", "点睛位（笔尖触纸的精确位置）"),
+    ("eye_post", "点睛后（竖直抬到与预抓握点等高，看 z 数值对齐）"),
+    ("paper1_tl", "纸1 左上角（★点睛全流程跑通后才标纸面点）"),
     ("paper1_tr", "纸1 右上角"),
     ("paper1_bl", "纸1 左下角"),
     ("paper1_br", "纸1 右下角"),
@@ -945,8 +959,10 @@ FLOW_LABELS = {"pick_pen": "取笔", "return_pen": "还笔",
 FLOW_WAYPOINTS = {        # 每个流程缺哪个航点就不许跑（按钮禁用 + 服务端再拦一次）
     "pick_pen": ["home", "pen_lift", "pen_grasp"],
     "return_pen": ["home", "pen_lift", "pen_grasp"],
-    "dot_eye_full": ["home", "pen_lift", "pen_grasp", "ink_dip", "eye_dot"],
-    "dot_eye_only": ["ink_dip", "eye_dot"],
+    "dot_eye_full": ["home", "pen_lift", "pen_grasp",
+                     "ink_pre", "ink_dip", "ink_post",
+                     "eye_pre", "eye_dot", "eye_post"],
+    "dot_eye_only": ["ink_pre", "ink_dip", "ink_post", "eye_pre", "eye_dot", "eye_post"],
 }
 
 
@@ -987,23 +1003,34 @@ def _build_flow_steps(flow):
             hand.grasp_pen()
         time.sleep(1.0)                      # 等手指收拢再抬笔
 
-    def release():
-        if hand is None:
-            print("[mock] 无灵巧手，跳过张开动作")
-        else:
-            hand.open()
-        time.sleep(1.0)
-
     def dip():
-        _make_engine(allow_complex=True).dip_ink()   # 复用 write_engine 验证过的蘸墨
+        """蘸墨（10-15 新航点方案，调用前已到 ink_pre）：下探蘸墨点停 1.5s →
+        抬到蘸墨后悬停（刚离砚台即可）→ 原地 ±8mm 抖墨往返 2 次甩掉浮墨。"""
+        vertical_to("ink_dip", "下探蘸墨")
+        time.sleep(1.5)
+        vertical_to("ink_post", "抬到蘸墨后悬停")
+        base = arm.get_pose()
+        for i, dx in enumerate((8.0, -16.0, 16.0, -8.0), 1):  # ±8mm 往返 2 次
+            nxt = base[:]; nxt[0] += dx
+            arm.move_ik(nxt, vel=5)
+            time.sleep(0.15)
+            print(f"  [抖墨] 第 {i}/4 段")
 
     def dot_down():
         vertical_to("eye_dot", "下降点睛")
         time.sleep(0.5)                      # 停半秒让墨点上纸
 
     def dot_up():
-        wp = arm.get_waypoint("eye_dot")
-        arm.move_ik([wp[0], wp[1], wp[2] + 50.0, wp[3], wp[4], wp[5]], vel=5)
+        # 竖直提升到「点睛后」（与预抓握点等高，标定时已对齐 z）
+        vertical_to("eye_post", "抬到点睛后")
+
+    def level_to(name, why):
+        """等高水平移动 + 竖直对齐到目标航点（点睛后→预抓握点用这种：
+        等高平移不抬转场高度，省时间；用户确认这段路径不经过笔筒）。"""
+        wp = arm.get_waypoint(name)
+        cur = arm.get_pose()
+        arm.move_ik([wp[0], wp[1], cur[2], wp[3], wp[4], wp[5]], vel=10)
+        arm.move_ik(wp, vel=5)
 
     def pre_grasp():
         if hand is None:
@@ -1012,26 +1039,45 @@ def _build_flow_steps(flow):
             hand.pre_grasp_pen()
         time.sleep(1.0)
 
+    def hand_open():
+        if hand is None:
+            print("[mock] 无灵巧手，跳过伸直动作")
+        else:
+            hand.open()
+        time.sleep(1.0)
+
     steps = []
     if flow in ("pick_pen", "dot_eye_full"):
-        # 10-14 新布局：笔筒贴着砚台、筒内笔顶高过 ink_pre，笔筒区只从正上方垂直
-        # 进出（_goto_wp 对笔筒区航点自动把横移高度抬到 PEN_TRAVEL_Z）
+        # 笔筒区只从正上方垂直进出（_goto_wp 对笔筒区航点自动抬到 PEN_TRAVEL_Z）
         steps += [("回 home", go_home),
-                  ("抬到高位，去笔筒正上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
+                  ("抬到高位，去预抓握点 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
                   ("手预抓握", pre_grasp),
-                  ("下降到抓笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到抓笔位")),
+                  ("竖直下降到抓握位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到抓握位")),
                   ("手抓握（抓笔）", grasp),
-                  ("抬回笔筒上方 pen_lift", lambda: vertical_to("pen_lift", "抬回笔筒上方"))]
+                  ("竖直抬回预抓握点 pen_lift", lambda: vertical_to("pen_lift", "抬回预抓握点"))]
+    if flow == "dot_eye_only":
+        # 从任意位置起（手里已有笔）：三段式安全到蘸墨前悬停
+        steps += [("移到蘸墨前悬停 ink_pre", lambda: _goto_wp(arm, "ink_pre"))]
+    if flow == "dot_eye_full":
+        # 刚从预抓握点抬笔出来：等高平移过去（笔已脱筒，路径不经过笔筒，省时间）
+        steps += [("等高平移到蘸墨前悬停 ink_pre", lambda: level_to("ink_pre", "去蘸墨前悬停"))]
     if flow in ("dot_eye_full", "dot_eye_only"):
-        steps += [("蘸墨", dip),
-                  ("去点睛点上方 50mm", lambda: _goto_wp(arm, "eye_dot", final_dz=50.0)),
-                  ("下降点睛", dot_down),
-                  ("抬起 50mm", dot_up)]
+        steps += [("蘸墨+抖墨", dip),
+                  ("平移到预点睛 eye_pre（不抬转场高，路径不经过笔筒）",
+                   lambda: level_to("eye_pre", "去预点睛")),
+                  ("竖直下降到点睛位", dot_down),
+                  ("竖直提升到点睛后 eye_post", dot_up)]
     if flow in ("return_pen", "dot_eye_full"):
-        steps += [("抬到高位，去笔筒正上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
-                  ("下降到放笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到放笔位")),
-                  ("手张开（放笔）", release),
-                  ("抬回笔筒上方 pen_lift", lambda: vertical_to("pen_lift", "抬回笔筒上方")),
+        # dot_eye_full 从「点睛后」出发：与预抓握点等高，直接平移（用户确认路径不过笔筒）。
+        # 单独还笔起点不定（可能在纸面低位）：必须三段式先抬高位
+        first = [("等高平移回预抓握点 pen_lift", lambda: level_to("pen_lift", "回预抓握点"))] \
+            if flow == "dot_eye_full" else \
+            [("抬到高位，去预抓握点 pen_lift", lambda: _goto_wp(arm, "pen_lift"))]
+        steps += first + [
+                  ("竖直下降到抓握位放笔", lambda: vertical_to("pen_grasp", "下降到放笔位")),
+                  ("手松开成预抓握（留笔在筒里）", pre_grasp),
+                  ("竖直抬回预抓握点 pen_lift", lambda: vertical_to("pen_lift", "抬回预抓握点")),
+                  ("手伸直", hand_open),
                   ("回 home", go_home)]
     return steps
 
