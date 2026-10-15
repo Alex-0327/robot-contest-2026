@@ -564,15 +564,28 @@ let ffb = {};      // 最近一次读到的电机实际角度
 function buildFjog() {
   const box = document.getElementById('fjog');
   box.innerHTML = '';
-  FJOINTS.forEach(([j, label]) => {
+  FJOINTS.forEach(function(pair) {
+    const j = pair[0], label = pair[1];
     const row = document.createElement('div');
     row.className = 'row';
     row.style.cssText = 'gap:6px;font-size:15px';
-    row.innerHTML =
-      '<span style="display:inline-block;width:150px">' + label + ' ' + j + '</span>' +
-      '<button onclick="handJog(\'' + j + '\',-1)">−</button>' +
-      '<span id="fv_' + j + '" style="display:inline-block;width:150px;text-align:center">?</span>' +
-      '<button onclick="handJog(\'' + j + '\',1)">＋</button>';
+    const span = document.createElement('span');
+    span.style.cssText = 'display:inline-block;width:150px';
+    span.textContent = label + ' ' + j;
+    const minus = document.createElement('button');
+    minus.textContent = '−';
+    minus.onclick = function() { handJog(j, -1); };
+    const val = document.createElement('span');
+    val.id = 'fv_' + j;
+    val.style.cssText = 'display:inline-block;width:150px;text-align:center';
+    val.textContent = '?';
+    const plus = document.createElement('button');
+    plus.textContent = '＋';
+    plus.onclick = function() { handJog(j, 1); };
+    row.appendChild(span);
+    row.appendChild(minus);
+    row.appendChild(val);
+    row.appendChild(plus);
     box.appendChild(row);
   });
   renderFjog();
