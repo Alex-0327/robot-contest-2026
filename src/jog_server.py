@@ -232,6 +232,20 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="rmove('rz',-1)">RZ−</button>
   <button onclick="rmove('rz', 1)">RZ+</button>
 </div>
+<hr style="margin:10px 0">
+<p class="tip"><b>手指微调</b>（拇指/食指/中指）。显示的是最后一次指令值，括弧里是点「读实际角度」
+读到的电机真实角度。<b>电机顶死会锁死：一次只动几度，觉得紧了往反方向退。</b></p>
+<div class="row">
+  <label>手指步长
+    <select id="fstep">
+      <option value="1">1°</option>
+      <option value="3" selected>3°</option>
+      <option value="5">5°</option>
+    </select>
+  </label>
+  <button onclick="handFb()">读实际角度</button>
+</div>
+<div id="fjog"></div>
 <div class="row">
   <input id="wpname" placeholder="航点名，如 paper1_tl" style="font-size:16px;padding:8px;width:220px">
   <button onclick="savewp()">存航点（自由命名，不走三读核对）</button>
@@ -537,6 +551,81 @@ async function handCmd(action) {
     setMsg('灵巧手已' + names[action]);
   } catch (e) { setMsg('手部动作失败：' + e.message, true); }
 }
+
+// ---------------- 手指微调 ----------------
+const FJOINTS = [
+  ['th_rot', '拇指根旋'], ['th_mcp', '拇指根弯'], ['th_dip', '拇指尖'],
+  ['ff_mcp', '食指根'],   ['ff_dip', '食指尖'],
+  ['mf_mcp', '中指根'],   ['mf_dip', '中指尖'],
+];
+let fstate = {};   // 最后一次指令值（服务端 Hand.state）
+let ffb = {};      // 最近一次读到的电机实际角度
+
+function buildFjog() {
+  const box = document.getElementById('fjog');
+  box.innerHTML = '';
+  FJOINTS.forEach(([j, label]) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.cssText = 'gap:6px;font-size:15px';
+    row.innerHTML =
+      '<span style="display:inline-block;width:150px">' + label + ' ' + j + '</span>' +
+      '<button onclick="handJog(\'' + j + '\',-1)">−</button>' +
+      '<span id="fv_' + j + '" style="display:inline-block;width:150px;text-align:center">?</span>' +
+      '<button onclick="handJog(\'' + j + '\',1)">＋</button>';
+    box.appendChild(row);
+  });
+  renderFjog();
+}
+
+function renderFjog() {
+  FJOINTS.forEach(([j]) => {
+    const el = document.getElementById('fv_' + j);
+    if (!el) return;
+    const cmd = (j in fstate) ? fstate[j].toFixed(0) + '°' : '?';
+    const act = (j in ffb) ? '（实际 ' + ffb[j].toFixed(1) + '°）' : '';
+    el.textContent = cmd + act;
+  });
+}
+
+async function handJog(joint, dir) {
+  if (busy || writeActive) return;
+  const step = parseFloat(document.getElementById('fstep').value);
+  try {
+    const r = await fetch('/api/hand_jog', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({joint, delta: dir * step})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    fstate = j.state;
+    renderFjog();
+    setMsg(joint + ' → ' + j.value.toFixed(0) + '°');
+  } catch (e) { setMsg('手指微调失败：' + e.message, true); }
+}
+
+async function handFb() {
+  try {
+    const r = await fetch('/api/hand_fb');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    fstate = j.state || fstate;
+    ffb = j.feedback || {};
+    renderFjog();
+    setMsg('已读取手指实际角度');
+  } catch (e) { setMsg('读取失败：' + e.message, true); }
+}
+
+async function loadHandState() {
+  try {
+    const r = await fetch('/api/hand_state');
+    const j = await r.json();
+    if (r.ok && j.state) { fstate = j.state; renderFjog(); }
+  } catch (e) { /* 静默 */ }
+}
+
+buildFjog();
+loadHandState();
 
 async function refreshPose() {
   // 写字期间不并发读位姿：fairino RPC 与写字线程共用一条连接，避免交错
@@ -1261,6 +1350,21 @@ class Handler(BaseHTTPRequestHandler):
                     for n, w in wps.items()]})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/hand_state":
+            # 手指微调：最后一次指令值（无需连手也可查；未连过则为 None）
+            hand = get_hand()
+            self._send_json({"state": dict(hand.state) if hand is not None else None})
+        elif self.path == "/api/hand_fb":
+            # 手指微调：读电机实际角度（需要 CAN 连接）
+            try:
+                hand = get_hand()
+                if hand is None:
+                    raise RuntimeError("mock 模式无灵巧手")
+                fb = hand._hand.get_feedback()
+                self._send_json({"state": dict(hand.state),
+                                 "feedback": {k: v.angle for k, v in fb.joints.items()}})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
         elif self.path == "/api/write_status":
             with _write_lock:
                 self._send_json(dict(_write))
@@ -1387,6 +1491,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
             finally:
                 _move_lock.release()
+        elif self.path == "/api/hand_jog":
+            # 手指微调：单关节相对调整（基于最后指令值，步长由前端给，限 ±10°）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                joint = str(req["joint"]).strip()
+                delta = float(req["delta"])
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            allow = {"th_rot", "th_mcp", "th_dip",
+                     "ff_mcp", "ff_dip", "mf_mcp", "mf_dip"}
+            if joint not in allow:
+                self._send_json({"error": f"不允许微调的关节 {joint!r}"}, 400)
+                return
+            if abs(delta) > 10:
+                self._send_json({"error": "单步不得超过 10°（防顶死电机）"}, 400)
+                return
+            try:
+                with _write_lock:
+                    writing = _write["status"] in ("running", "stopping")
+                if writing:
+                    raise RuntimeError("有任务进行中，禁止手部动作")
+                hand = get_hand()
+                if hand is None:
+                    raise RuntimeError("mock 模式无灵巧手")
+                hand.adjust_joint(joint, delta)
+                self._send_json({"ok": True, "state": dict(hand.state),
+                                 "joint": joint, "value": hand.state[joint]})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
         elif self.path == "/api/hand":
             # 灵巧手三态：伸直 / 预抓握 / 抓握（握笔参数与 write_engine 同源）
             try:
