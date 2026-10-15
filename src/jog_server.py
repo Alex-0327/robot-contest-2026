@@ -102,6 +102,12 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="moveZ(50)">抬 5cm</button>
   <button onclick="moveZ(-50)">降 5cm</button>
 </div>
+<div class="row">
+  <button onclick="alignPose()">对正写字姿态</button>
+  <span style="color:#999;font-size:13px">通路测试通过后立刻点：位置不动，腕部一次性转到写字姿态
+  （rx≈-96 ry≈-6 rz≈-120），之后标定只动 xyz。要求：空手、手指已伸直、臂周无障碍。
+  若报错不可达，先用第 6 步把臂抬高点再试。</span>
+</div>
 
 <hr>
 <h2>第 2 步 · 取笔 / 还笔</h2>
@@ -446,6 +452,21 @@ async function resetCtl() {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setMsg('已复位，自动模式');
   } catch (e) { setMsg('复位失败：' + e.message, true); }
+}
+
+async function alignPose() {
+  // 对正写字姿态：保持当前 xyz，rpy 一次性转到写字姿态（10-12 定稿值）。
+  // 从运输收拢构型直飞可能不可达 → 报错是安全失败，抬高臂再试即可
+  if (busy || writeActive) return;
+  if (!confirm('把腕部姿态对正到写字姿态（rx≈-96 ry≈-6 rz≈-120），位置不动。\\n确认：空手、手指已伸直、臂周无障碍？')) return;
+  busy = true; setButtons(true); setMsg('对正写字姿态中…');
+  try {
+    const r = await fetch('/api/align_pose', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('已对正写字姿态，之后标定只动 xyz');
+  } catch (e) { setMsg('对正失败：' + e.message + '（先把臂抬高/挪开再试）', true); }
+  finally { busy = false; setButtons(false); }
 }
 
 async function gotoXYZ() {
@@ -889,6 +910,8 @@ def _make_engine(allow_complex):
 # 步与步之间检查停止标志。竖直移动一律 move_ik（MoveL 会撞奇异点）。
 # ============================================================================
 GOTO_TRAVEL_Z = 300.0     # 三段式转场高度（与 /api/goto_waypoint 一致）
+WRITE_RPY = (-95.8, -5.8, -120.0)   # 写字姿态（10-12 定稿：home/纸角/蘸墨全在这个姿态
+                                    # 附近，rz≈-120 是 rz 扫描全纸可达性最优解）
 PEN_AREA_WPS = ("pen_lift", "pen_grasp")   # 笔筒区航点
 PEN_TRAVEL_Z = 340.0      # 笔筒区横移高度下限：必须高过筒内竖笔的顶部（笔筒贴着砚台，
                           # 筒内笔顶高过 ink_pre 悬停位，低位横移必撞笔——10-15 布局复核）。
@@ -1355,6 +1378,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"请求参数错误: {e}"}, 400)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/align_pose":
+            # 对正写字姿态：保持当前 xyz，rpy 一次性转到 WRITE_RPY（move_ik 重解，
+            # 不可达会报错而不是乱动，安全失败）
+            if not _move_lock.acquire(blocking=False):
+                self._send_json({"error": "上一个运动尚未完成，请稍候"}, 409)
+                return
+            try:
+                arm = get_arm()
+                cur = arm.get_pose()
+                arm.move_ik(list(cur[:3]) + list(WRITE_RPY), vel=5)
+                self._send_json({"ok": True, "pose": arm.get_pose()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            finally:
+                _move_lock.release()
         elif self.path == "/api/move_z":
             # 第 1 步通路测试：抬/降 5cm（上限 ±50mm，比 jog 微调的 20mm 宽）
             try:
