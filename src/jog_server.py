@@ -223,6 +223,15 @@ INDEX_HTML = """<!DOCTYPE html>
   <button onclick="savewp()">存航点（自由命名，不走三读核对）</button>
 </div>
 <div class="row">
+  <input id="gx" placeholder="X mm" style="font-size:16px;padding:8px;width:76px">
+  <input id="gy" placeholder="Y mm" style="font-size:16px;padding:8px;width:76px">
+  <input id="gz" placeholder="悬停Z(默认250)" style="font-size:16px;padding:8px;width:140px">
+  <button onclick="gotoXYZ()">飞到坐标</button>
+</div>
+<p class="tip">「飞到坐标」= 一次性三段式（抬 300 → 平移 → 降到悬停 Z），<b>首次标定够不到的点用它</b>：
+估算个大概坐标先飞到目标上方悬停，再用上面的按钮微调对准。比一点一点挪可靠（点动逼近限位会锁死，
+直飞是重新解算不会）。坐标估算错了没关系，反正是落在高位。去笔筒区时悬停 Z 填 250 以上。</p>
+<div class="row">
   <button onclick="gohome()">回 home</button>
 </div>
 <script>
@@ -437,6 +446,29 @@ async function resetCtl() {
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     setMsg('已复位，自动模式');
   } catch (e) { setMsg('复位失败：' + e.message, true); }
+}
+
+async function gotoXYZ() {
+  // 首次标定的粗定位：一次性三段式直飞目标坐标上方悬停（增量点动逼近限位会锁死，
+  // 直飞是重新 IK 解算，没有这个毛病）
+  if (busy || writeActive) return;
+  const gx = parseFloat(document.getElementById('gx').value);
+  const gy = parseFloat(document.getElementById('gy').value);
+  const gz = parseFloat(document.getElementById('gz').value) || 250.0;
+  if (isNaN(gx) || isNaN(gy)) { setMsg('先填 X 和 Y（mm），Z 不填默认悬停 250', true); return; }
+  if (!confirm('飞到 (' + gx + ', ' + gy + ') 上方悬停 z=' + gz +
+               '？\\n会先抬到 300 再平移、最后下降。\\n确认臂周无障碍？')) return;
+  busy = true; setButtons(true); setMsg('飞到坐标中…');
+  try {
+    const r = await fetch('/api/goto', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x: gx, y: gy, z: gz})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    showPose(j.pose); setMsg('已到 (' + gx + ', ' + gy + ') 上方悬停，用微调对准后存点');
+  } catch (e) { setMsg('飞到坐标失败：' + e.message, true); }
+  finally { busy = false; setButtons(false); }
 }
 
 async function gohome() {
