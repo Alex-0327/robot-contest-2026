@@ -247,6 +247,10 @@ INDEX_HTML = """<!DOCTYPE html>
 </div>
 <div id="fjog"></div>
 <div class="row">
+  <button onclick="handSave('pre')">把当前手型存为预抓握</button>
+  <button onclick="handSave('grasp')">把当前手型存为抓握</button>
+</div>
+<div class="row">
   <input id="wpname" placeholder="航点名，如 paper1_tl" style="font-size:16px;padding:8px;width:220px">
   <button onclick="savewp()">存航点（自由命名，不走三读核对）</button>
 </div>
@@ -627,6 +631,21 @@ async function handFb() {
     renderFjog();
     setMsg('已读取手指实际角度');
   } catch (e) { setMsg('读取失败：' + e.message, true); }
+}
+
+async function handSave(which) {
+  const label = which === 'pre' ? '预抓握' : '抓握';
+  if (!confirm('把当前手型（最后一次指令值）存为「' + label + '」参数？\\n' +
+               '会覆盖 data/grasp_params.json 里的旧值并立即生效。')) return;
+  try {
+    const r = await fetch('/api/hand_save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({which})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    setMsg('已存为' + label + '：' + j.saved);
+  } catch (e) { setMsg('存握姿失败：' + e.message, true); }
 }
 
 async function loadHandState() {
@@ -1533,6 +1552,52 @@ class Handler(BaseHTTPRequestHandler):
                 hand.adjust_joint(joint, delta)
                 self._send_json({"ok": True, "state": dict(hand.state),
                                  "joint": joint, "value": hand.state[joint]})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+        elif self.path == "/api/hand_save":
+            # 把当前手型（最后指令值）存为预抓握/抓握参数，写 grasp_params.json 并热更新
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(length) or b"{}")
+                which = str(req["which"]).strip()
+            except (KeyError, ValueError, TypeError) as e:
+                self._send_json({"error": f"请求参数错误: {e}"}, 400)
+                return
+            if which not in ("pre", "grasp"):
+                self._send_json({"error": f"which 只能是 pre/grasp，收到 {which!r}"}, 400)
+                return
+            try:
+                with _write_lock:
+                    writing = _write["status"] in ("running", "stopping")
+                if writing:
+                    raise RuntimeError("有任务进行中，禁止改握姿参数")
+                hand = get_hand()
+                if hand is None:
+                    raise RuntimeError("mock 模式无灵巧手")
+                import hand_api
+                path = hand_api._PARAMS_FILE
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        d = json.load(f)
+                except Exception:
+                    d = {}
+                s = hand.state
+                if which == "grasp":
+                    d.setdefault("grasp", {})["joints"] = {
+                        k: s.get(k, 0) for k in
+                        ("th_rot", "th_mcp", "th_dip", "ff_mcp", "ff_dip", "mf_mcp", "mf_dip")}
+                else:
+                    d.setdefault("pre_grasp", {})["step1_thumb_rotate"] = {"th_rot": s.get("th_rot", 70)}
+                    d["pre_grasp"]["step2_fingers"] = {
+                        k: s.get(k, 0) for k in ("ff_mcp", "ff_dip", "mf_mcp", "mf_dip")}
+                d.setdefault("caution", []).append(
+                    time.strftime("%m-%d %H:%M") + " 面板「存为"
+                    + ("预抓握" if which == "pre" else "抓握") + "」")
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(d, f, ensure_ascii=False, indent=2)
+                hand_api.reload_params()
+                saved = d["grasp"]["joints"] if which == "grasp" else d["pre_grasp"]
+                self._send_json({"ok": True, "saved": json.dumps(saved, ensure_ascii=False)})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
         elif self.path == "/api/hand":

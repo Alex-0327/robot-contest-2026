@@ -2,7 +2,13 @@
 
 预成形/捏合角度为真机实测值（见各常量注释）。纯位置控制：
 set_pressure_limit 在本固件上会导致电机停在半路，不要用。
+
+握笔参数的唯一权威来源是 data/grasp_params.json（面板「存为预抓握/抓握」
+按钮写它）；下面的常量只是文件缺失时的兜底默认值。改参数后调
+reload_params() 热更新，不必重启进程。
 """
+import json
+import os
 import time
 
 from pyzlg_dexhand import RightDexHand  # 左手换 LeftDexHand
@@ -11,17 +17,51 @@ OPEN = dict(th_rot=0, th_mcp=0, th_dip=0, ff_spr=0,
             ff_mcp=0, ff_dip=0, mf_mcp=0, mf_dip=0,
             rf_mcp=0, rf_dip=0, lf_mcp=0, lf_dip=0)
 
-# 握笔姿态（10-11 真机实测调定，抓取加粗圆筒笔杆稳定悬吊不滑脱）：
-# 顺序要点：拇指先旋转到位（保持伸直），再弯曲——旋转和弯曲同时进行会顶到食指。
-# 与 data/grasp_params.json 一致，改这里要同步改数据集。
-# 10-15 预抓握弯曲指统一松 5°（40/30→35/25）：进筒通道更宽，下降不易刮筒口
-PEN_PRE_GRASP_FINGERS = dict(ff_mcp=35, ff_dip=25, mf_mcp=35, mf_dip=25)
-PEN_PRE_GRASP_THUMB = dict(th_rot=70, th_mcp=0, th_dip=0)  # 预成形时拇指只旋转、保持伸直，给下降留通道
+_PARAMS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'data', 'grasp_params.json')
 
-# 最终握紧姿态（绝对角度）
-# 10-12 写字实测笔杆微滑 → ff_mcp 70→75 / mf_mcp 75→80 / th_mcp 55→60（每次只加 5°，防电机顶死）
-PEN_GRASP_FINGERS = dict(ff_mcp=75, ff_dip=30, mf_mcp=80, mf_dip=30)
-PEN_GRASP_THUMB = dict(th_rot=70, th_mcp=40, th_dip=0)
+# 兜底默认值（grasp_params.json 缺失/损坏时使用）
+_DEFAULTS = {
+    "pre_thumb":   dict(th_rot=70, th_mcp=0, th_dip=0),
+    "pre_fingers": dict(ff_mcp=35, ff_dip=25, mf_mcp=35, mf_dip=25),
+    "grasp_thumb": dict(th_rot=70, th_mcp=40, th_dip=0),
+    "grasp_fingers": dict(ff_mcp=75, ff_dip=30, mf_mcp=80, mf_dip=30),
+}
+
+
+def _read_params():
+    try:
+        with open(_PARAMS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def reload_params():
+    """从 data/grasp_params.json 重读握笔参数，原地更新四个姿态字典。"""
+    d = _read_params()
+    pre = d.get("pre_grasp", {})
+    grasp = d.get("grasp", {}).get("joints", {})
+    PEN_PRE_GRASP_THUMB.clear()
+    PEN_PRE_GRASP_THUMB.update(dict(
+        th_rot=pre.get("step1_thumb_rotate", {}).get("th_rot", _DEFAULTS["pre_thumb"]["th_rot"]),
+        th_mcp=0, th_dip=0))
+    PEN_PRE_GRASP_FINGERS.clear()
+    PEN_PRE_GRASP_FINGERS.update(pre.get("step2_fingers") or _DEFAULTS["pre_fingers"])
+    PEN_GRASP_THUMB.clear()
+    PEN_GRASP_THUMB.update({k: grasp.get(k, v) for k, v in _DEFAULTS["grasp_thumb"].items()})
+    PEN_GRASP_FINGERS.clear()
+    PEN_GRASP_FINGERS.update({k: grasp.get(k, v) for k, v in _DEFAULTS["grasp_fingers"].items()})
+
+
+# 握笔姿态（真机实测调定，抓取加粗圆筒笔杆稳定悬吊不滑脱）：
+# 顺序要点：拇指先旋转到位（保持伸直），再弯曲——旋转和弯曲同时进行会顶到食指。
+# 每次只调 5°，防电机顶死。
+PEN_PRE_GRASP_THUMB = dict(_DEFAULTS["pre_thumb"])
+PEN_PRE_GRASP_FINGERS = dict(_DEFAULTS["pre_fingers"])
+PEN_GRASP_THUMB = dict(_DEFAULTS["grasp_thumb"])
+PEN_GRASP_FINGERS = dict(_DEFAULTS["grasp_fingers"])
+reload_params()
 
 
 class Hand:
