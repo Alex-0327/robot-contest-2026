@@ -11,16 +11,17 @@ Linux 机上，绑定 127.0.0.1，经 SSH 端口转发访问，不暴露局域�
 
 页面 6 个编号区块（操作员不需要参加过调试）：
     第 1 步 通路测试：手三态 + 臂抬/降 5cm
-    第 2 步 取笔/还笔：自动编排（home→砚台上方→笔筒上方→手预抓握→抓笔位→手抓握→抬回）
-    第 3 步 航点标定向导：有序点位清单（先砚台区、再借道标笔筒区），
-             保存前连读 3 次 + 写盘后回读核对
+    第 2 步 取笔/还笔：自动编排（抬到高位越筒内笔顶→笔筒正上方→手预抓握→垂直下降抓/放）
+    第 3 步 航点标定向导：有序点位清单（先砚台区、再笔筒区——去笔筒区自动抬高位
+             越过筒内笔顶），保存前连读 3 次 + 写盘后回读核对
     第 4 步 画龙点睛：全流程（取笔→蘸墨→点睛→还笔）/ 仅点睛
     第 5 步 写字：试写一个字 + 检查字库 + 预览 + 开始书写
     第 6 步 精细微调：jog 点动（第 3 步对不准时用）
 
-10-14 官方布局更新：笔筒与砚台相邻（间隔约 17.5cm），都在远离基座一侧。
-接近笔筒区一律借道砚台上方（ink_pre）→ 平移到笔筒上方（pen_lift）→ 才下降，
-不从 home 直飞笔筒区（笔挂在 TCP 下约 18cm，直飞路径扫过砚台/笔筒顶部有剐蹭风险）。
+10-14 官方布局更新：笔筒与砚台相邻（间隔约 17.5cm），都在远离基座一侧，
+且筒内竖着的毛笔顶部高过砚台悬停位（ink_pre）。纪律：笔筒区只从正上方垂直
+进出——任何横向进入/离开笔筒区之前，先抬到高过筒内笔顶的高度（面板内建
+PEN_TRAVEL_Z=340mm 下限）；低位横向挪向笔筒 = 必撞筒内笔。
 
 注意：控制器同时只应由一个程序下发运动指令，且 CNDE 状态流只支持单连接。
 运行本面板前必须退出 teach_daemon（echo quit > /tmp/teach_cmd），反之亦然。
@@ -104,8 +105,9 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <hr>
 <h2>第 2 步 · 取笔 / 还笔</h2>
-<p class="tip">这一步是干嘛的：让臂自动去笔筒抓笔 / 放回笔。路线：home → 砚台上方 → 笔筒上方 → 下降抓/放
-（10-14 新布局：笔筒和砚台挨着，借道砚台上方接近，不直飞）。<b>空手也能点，先空跑一遍确认轨迹。</b>
+<p class="tip">这一步是干嘛的：让臂自动去笔筒抓笔 / 放回笔。路线：抬到高位（越过筒内笔顶）
+→ 笔筒正上方 → 垂直下降抓/放（10-14 新布局：笔筒贴着砚台、筒内笔比砚台高，笔筒区只从
+正上方垂直进出，面板已自动抬高，不用管）。<b>空手也能点，先空跑一遍确认轨迹。</b>
 按钮灰的说明缺航点（旁边会写缺哪个），先去第 3 步补齐。</p>
 <div class="row">
   <button id="btn_pick" onclick="flowStart('pick_pen')">取笔</button>
@@ -117,9 +119,10 @@ INDEX_HTML = """<!DOCTYPE html>
 <hr>
 <h2>第 3 步 · 航点标定向导</h2>
 <p class="tip">这一步是干嘛的：按从上到下的顺序把每个点位重新对一遍（先砚台区 ink_pre/ink_dip，
-再笔筒区 pen_lift/pen_grasp：笔筒和砚台相邻，先到砚台上方悬停，再平移到笔筒上方，最后才下降）。
-点「去微调」到点位附近 → 需要的话用第 6 步的微调对准 → 点「保存到该点」。保存时会连读 3 次确认臂没动
-（晃动 ≥1mm 不让存），存完自动回读核对。</p>
+再笔筒区 pen_lift/pen_grasp，最后纸面点）。点「去微调」到点位附近 → 需要的话用第 6 步的微调对准
+→ 点「保存到该点」。保存时会连读 3 次确认臂没动（晃动 ≥1mm 不让存），存完自动回读核对。
+<b>注意：笔筒贴着砚台、筒内笔比砚台高，用第 6 步手动微调时，严禁在低位横向挪向笔筒——
+先 Z+ 抬到高过筒内笔顶再横移（点「去微调」会自动抬高，手动挪不会）。</b></p>
 <div class="row">
   <label style="font-size:14px"><input type="checkbox" id="goexact">去微调时降到底（默认停在点位上方 15mm）</label>
   <button onclick="loadCalib()">刷新清单</button>
@@ -308,8 +311,8 @@ async function moveZ(dz) {
 const flowNames = {pick_pen: '取笔', return_pen: '还笔',
                    dot_eye_full: '点睛全流程', dot_eye_only: '仅点睛'};
 const flowDesc = {
-  pick_pen: '回 home → 砚台上方 → 笔筒上方 → 手预抓握 → 下降到抓笔位 → 手抓握 → 抬回',
-  return_pen: '去笔筒上方 → 下降到放笔位 → 手张开 → 抬回 → 砚台上方 → 回 home',
+  pick_pen: '回 home → 抬到高位（越过筒内笔顶）→ 笔筒正上方 → 手预抓握 → 垂直下降到抓笔位 → 手抓握 → 抬回',
+  return_pen: '抬到高位 → 笔筒正上方 → 垂直下降到放笔位 → 手张开 → 抬回高位 → 回 home',
   dot_eye_full: '取笔 → 蘸墨 → 点睛 → 还笔（整套）',
   dot_eye_only: '蘸墨 → 去点睛点上方 → 下降点睛 → 抬起'
 };
@@ -854,10 +857,15 @@ def _make_engine(allow_complex):
 # 步与步之间检查停止标志。竖直移动一律 move_ik（MoveL 会撞奇异点）。
 # ============================================================================
 GOTO_TRAVEL_Z = 300.0     # 三段式转场高度（与 /api/goto_waypoint 一致）
+PEN_AREA_WPS = ("pen_lift", "pen_grasp")   # 笔筒区航点
+PEN_TRAVEL_Z = 340.0      # 笔筒区横移高度下限：必须高过筒内竖笔的顶部（笔筒贴着砚台，
+                          # 筒内笔顶高过 ink_pre 悬停位，低位横移必撞笔——10-15 布局复核）。
+                          # 若报 err=38（该位置抬不到这么高）：先用第 6 步 Z+ 手动抬高，
+                          # 再点流程/去微调，并把情况告诉程序组调这个数
 
 CALIB_POINTS = [          # 第 3 步向导的有序点位清单（从上到下 = 示教顺序）
-    # 10-14 新布局：笔筒与砚台相邻，先标砚台区（ink_pre/ink_dip），
-    # 再借道砚台上方平移到笔筒区标 pen_lift/pen_grasp，不直飞
+    # 10-14 新布局：笔筒与砚台相邻，先标砚台区（ink_pre/ink_dip）再标笔筒区
+    # （pen_lift/pen_grasp）。去笔筒区时面板自动抬到 PEN_TRAVEL_Z 越过筒内笔顶
     ("home", "回零点"),
     ("ink_pre", "砚台上方（悬停位，接近笔筒区的中转点）"),
     ("ink_dip", "蘸墨点（笔尖进墨）"),
@@ -875,19 +883,21 @@ CALIB_POINTS = [          # 第 3 步向导的有序点位清单（从上到下 
 FLOW_LABELS = {"pick_pen": "取笔", "return_pen": "还笔",
                "dot_eye_full": "点睛全流程", "dot_eye_only": "仅点睛"}
 FLOW_WAYPOINTS = {        # 每个流程缺哪个航点就不许跑（按钮禁用 + 服务端再拦一次）
-    "pick_pen": ["home", "ink_pre", "pen_lift", "pen_grasp"],
-    "return_pen": ["home", "ink_pre", "pen_lift", "pen_grasp"],
-    "dot_eye_full": ["home", "ink_pre", "pen_lift", "pen_grasp", "ink_dip", "eye_dot"],
+    "pick_pen": ["home", "pen_lift", "pen_grasp"],
+    "return_pen": ["home", "pen_lift", "pen_grasp"],
+    "dot_eye_full": ["home", "pen_lift", "pen_grasp", "ink_dip", "eye_dot"],
     "dot_eye_only": ["ink_dip", "eye_dot"],
 }
 
 
 def _goto_wp(arm, name, final_dz=0.0):
     """三段式去航点：原地抬高 → 平移 → 竖直降下，全程 move_ik（与「去微调」同逻辑）。
-    final_dz>0 时停在点位上方（默认降到底）。"""
+    final_dz>0 时停在点位上方（默认降到底）。笔筒区航点横移高度不低于 PEN_TRAVEL_Z。"""
     wp = arm.get_waypoint(name)
     cur = arm.get_pose()
     safe_z = max(GOTO_TRAVEL_Z, cur[2], wp[2] + 50.0)  # 转场高度不低于目标上方 50mm
+    if name in PEN_AREA_WPS:
+        safe_z = max(safe_z, PEN_TRAVEL_Z)             # 越筒内笔顶
     high = cur[:]; high[2] = safe_z
     arm.move_ik(high, vel=10)
     arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
@@ -944,11 +954,10 @@ def _build_flow_steps(flow):
 
     steps = []
     if flow in ("pick_pen", "dot_eye_full"):
-        # 10-14 新布局：笔筒与砚台相邻（约 17.5cm），一律借道砚台上方接近笔筒，
-        # 不从 home 直飞笔筒区（笔挂 TCP 下 18cm，直飞路径扫过砚台/笔筒顶部）
+        # 10-14 新布局：笔筒贴着砚台、筒内笔顶高过 ink_pre，笔筒区只从正上方垂直
+        # 进出（_goto_wp 对笔筒区航点自动把横移高度抬到 PEN_TRAVEL_Z）
         steps += [("回 home", go_home),
-                  ("去砚台上方 ink_pre", lambda: _goto_wp(arm, "ink_pre")),
-                  ("平移到笔筒上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
+                  ("抬到高位，去笔筒正上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
                   ("手预抓握", pre_grasp),
                   ("下降到抓笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到抓笔位")),
                   ("手抓握（抓笔）", grasp),
@@ -959,11 +968,10 @@ def _build_flow_steps(flow):
                   ("下降点睛", dot_down),
                   ("抬起 50mm", dot_up)]
     if flow in ("return_pen", "dot_eye_full"):
-        steps += [("去笔筒上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
+        steps += [("抬到高位，去笔筒正上方 pen_lift", lambda: _goto_wp(arm, "pen_lift")),
                   ("下降到放笔位 pen_grasp", lambda: vertical_to("pen_grasp", "下降到放笔位")),
                   ("手张开（放笔）", release),
                   ("抬回笔筒上方 pen_lift", lambda: vertical_to("pen_lift", "抬回笔筒上方")),
-                  ("去砚台上方 ink_pre", lambda: _goto_wp(arm, "ink_pre")),
                   ("回 home", go_home)]
     return steps
 
@@ -1243,6 +1251,8 @@ class Handler(BaseHTTPRequestHandler):
                 wp = arm.get_waypoint(name)
                 cur = arm.get_pose()
                 safe_z = max(travel, cur[2], wp[2] + 50.0)  # 转场高度不低于目标上方 50mm
+                if name in PEN_AREA_WPS:        # 笔筒区：横移高度必须越筒内笔顶
+                    safe_z = max(safe_z, PEN_TRAVEL_Z)
                 high = cur[:]; high[2] = safe_z
                 arm.move_ik(high, vel=10)
                 arm.move_ik([wp[0], wp[1], safe_z, wp[3], wp[4], wp[5]], vel=10)
